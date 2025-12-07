@@ -114,8 +114,9 @@ function transformLayers(targetLayers, baseLayer) {
                     dW = 100 * (baseLayer.width / targetLayers[i].width),
                     dH = 100 * (baseLayer.height / targetLayers[i].height),
                     scale = dH > dW ? dH : dW;
+                    $.writeln(dX + ' ' + dY)
                 lr.move(dX, dY);
-                lr.transform(transformMode ? scale : 100, targetLayers[i].measurement.middle[0], targetLayers[i].measurement.middle[1], rotateMode ? -targetLayers[i].angle * angle_ratio : 0, dialog_mode)
+                lr.transform(transformMode ? scale : 100, targetLayers[i].measurement.middle[0]+dX, targetLayers[i].measurement.middle[1]+dY, rotateMode ? -targetLayers[i].angle * angle_ratio : 0, dialog_mode)
             }
         }
     }

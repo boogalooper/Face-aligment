@@ -2,7 +2,7 @@
 const moveMode = true// false - выравнивание центра лиц выключено, true - включено
 const transformMode = true // false - масштабирование выключено, true - включено
 const rotateMode = true // false - поворот головы выключен, true - включен
-const angle_ratio = 0.8 // 0-1 - коэффициент применяемый к углу наклона головы
+const angle_ratio = 0.5 // 0-1 - коэффициент применяемый к углу наклона головы
 const global_scale = 0.25 // 0-1 - коэффициент масштабирования для ускорения работы со слоями
 const ver = 0.1,
     API_HOST = '127.0.0.1',
@@ -49,7 +49,7 @@ function getFaceBounds(selectedLayers) {
         app.changeProgressText("Get face bounds: " + lr.getProperty("name", selectedLayers[i]))
         lr.selectLayers([selectedLayers[i]])
         var measurement = {};
-        measurement['bounds'] = lr.descToObject(lr.getProperty("bounds", selectedLayers[i]).value);
+        measurement['bounds'] = lr.descToObject(lr.getProperty("boundsNoEffects", selectedLayers[i]).value);
         lr.convertToSmartObject()
         lr.editSmartObject()
         doc.setScale(global_scale)

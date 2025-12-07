@@ -37,7 +37,7 @@ function getSelectedLayersIDs() {
             kind = lr.getProperty("layerKind", id);
         if (kind == 1 || kind == 5) {
             var locked = lr.descToObject(lr.getProperty("layerLocking", id).value);
-            if (lr.getProperty('background',id) || (!locked['protectAll'] && !locked['protectPosition'] && !locked['protectComposite'])) output.push(id)
+            if (lr.getProperty('background', id) || (!locked['protectAll'] && !locked['protectPosition'] && !locked['protectComposite'])) output.push(id)
         }
     }
     return output
@@ -68,9 +68,9 @@ function getFaceBounds(selectedLayers) {
             measurement['left'] = [result[33][0] * (1 / global_scale), result[33][1] * (1 / global_scale)]
             measurement['right'] = [result[263][0] * (1 / global_scale), result[263][1] * (1 / global_scale)]
             measurement['bottom'] = [result[152][0] * (1 / global_scale), result[152][1] * (1 / global_scale)]
-            measurement['middle'] = findMidpoint(measurement['right'], measurement['left'])
             measurement['faceLeft'] = [result[127][0] * (1 / global_scale), result[127][1] * (1 / global_scale)]
             measurement['faceRight'] = [result[356][0] * (1 / global_scale), result[356][1] * (1 / global_scale)]
+            measurement['middle'] = findMidpoint(measurement['faceRight'], measurement['faceLeft'])
         }
         function findMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
     }
@@ -79,9 +79,8 @@ function getFaceBounds(selectedLayers) {
         this.angle = Math.atan2(measurement.right[1] - measurement.left[1], measurement.right[0] - measurement.left[0]) * 180 / Math.PI
         this.widthLeft = Math.sqrt(Math.pow(measurement.faceLeft[0] - measurement.left[0], 2) + Math.pow(measurement.faceLeft[1] - measurement.left[1], 2))
         this.widthRight = Math.sqrt(Math.pow(measurement.faceRight[0] - measurement.right[0], 2) + Math.pow(measurement.faceRight[1] - measurement.right[1], 2))
-        var k = Math.sqrt(Math.pow((this.widthRight - this.widthLeft) / 2, 2))
-        this.width = Math.sqrt(Math.pow(measurement.faceRight[0] - measurement.faceLeft[0], 2) + Math.pow(measurement.faceRight[1] - measurement.faceLeft[1], 2)) + k
-        this.height = Math.sqrt(Math.pow(measurement.bottom[0] - measurement.middle[0], 2) + Math.pow(measurement.bottom[1] - measurement.middle[1], 2)) + k
+        this.width = Math.sqrt(Math.pow(measurement.right[0] - measurement.left[0], 2) + Math.pow(measurement.right[1] - measurement.left[1], 2))
+        this.height = Math.sqrt(Math.pow(measurement.bottom[0] - measurement.middle[0], 2) + Math.pow(measurement.bottom[1] - measurement.middle[1], 2))
         this.measurement = measurement
         measurement.middle[0] += measurement.bounds.left
         measurement.middle[1] += measurement.bounds.top
@@ -113,8 +112,7 @@ function AM(target, order) {
     var s2t = stringIDToTypeID,
         t2s = typeIDToStringID,
         AR = ActionReference,
-        AD = ActionDescriptor,
-        AL = ActionList;
+        AD = ActionDescriptor;
     target = target ? s2t(target) : null;
     this.getProperty = function (property, id, idxMode, descMode) {
         property = s2t(property);
@@ -159,15 +157,6 @@ function AM(target, order) {
         d.putPath(s2t('in'), pth);
         d.putBoolean(s2t('copy'), true);
         executeAction(s2t('save'), d, DialogModes.NO);
-    }
-    this.waitForRedraw = function () {
-        (d = new ActionDescriptor()).putEnumerated(s2t('state'), s2t('state'), s2t('redrawComplete'));
-        executeAction(s2t('wait'), d, DialogModes.NO);
-    }
-    this.addCounter = function (x, y) {
-        (d = new ActionDescriptor()).putDouble(s2t("x"), x);
-        d.putDouble(s2t("y"), y);
-        executeAction(s2t("countAdd"), d, DialogModes.NO);
     }
     this.selectLayers = function (IDList) {
         var r = new ActionReference()

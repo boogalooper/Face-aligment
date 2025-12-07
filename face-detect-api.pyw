@@ -3,14 +3,27 @@ import sys
 import subprocess
 import socket
 import json
+import time
+import threading
 
 API_HOST = "127.0.0.1"
 API_PORT_SEND = 6311
 API_PORT_LISTEN = 6310
 
+TIMEOUT = 5*60  # 5 минут
+last_request_time = time.time()
+
+
+def timeout_watcher():
+    global last_request_time
+    while True:
+        time.sleep(5)
+        if time.time() - last_request_time > TIMEOUT:
+            print("[INFO] Сервер простаивал 10 минут → завершаюсь")
+            os._exit(0)
+
 
 def send_data_to_jsx(obj):
-    """Отправка ответа обратно"""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((API_HOST, API_PORT_SEND))
@@ -18,7 +31,7 @@ def send_data_to_jsx(obj):
         s.close()
     except Exception as e:
         print("[ERROR] Ошибка отправки ответа:", e)
-        sys.exit()
+        sys.exit(0)
 
 
 def install_if_missing(package, import_name=None):
@@ -85,19 +98,28 @@ def detect_face_landmarks(image_path):
 
 
 def start_server():
+    global last_request_time
+
     print("[INFO] Запуск сервера", API_HOST, API_PORT_LISTEN)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((API_HOST, API_PORT_LISTEN))
     server.listen(1)
-    print("[INFO] Handshake → OK")
+
     send_data_to_jsx({"type": "answer", "message": "success"})
+    print("[INFO] Handshake → OK")
+
+    threading.Thread(target=timeout_watcher, daemon=True).start()
+
     while True:
         try:
             client_socket, addr = server.accept()
+            last_request_time = time.time()  # обновление таймера
             print("[INFO] Клиент подключен:", addr)
+
             raw = client_socket.recv(4096)
             message = json.loads(raw.decode("utf-8"))
             print("[INFO] Получено:", message)
+
             if message["type"] == "payload":
                 filepath = message["message"]
                 print("[INFO] Получен путь к файлу:", filepath)
@@ -107,9 +129,16 @@ def start_server():
                 except Exception as e:
                     print("[ERROR] Ошибка обработки:", e)
                     send_data_to_jsx({"type": "answer", "message": None})
+
             if message["type"] == "exit":
                 print("[INFO] Остановка сервера")
                 server.close()
+                sys.exit()
+
+            if message["type"] == "handshake":
+                send_data_to_jsx({"type": "answer", "message": "success"})
+                print("[INFO] Handshake → OK")
+
         except Exception as e:
             print(f"Произошла ошибка: {e}")
             send_data_to_jsx({"type": "answer", "message": None})

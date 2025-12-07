@@ -10,11 +10,11 @@
 const moveMode = true// false - выравнивание центра лиц выключено, true - включено
 const transformMode = true // false - масштабирование выключено, true - включено
 const rotateMode = true // false - поворот головы выключен, true - включен
-const angle_ratio = 0.5 // 0-1 - коэффициент применяемый к углу наклона головы
+const angle_ratio = 0.75 // 0-1 - коэффициент применяемый к углу наклона головы
 const global_scale = 0.25 // 0-1 - коэффициент масштабирования для ускорения работы со слоями
 const dialog_mode = DialogModes.NO // DialogModes.ALL - интерактивная траснформация, DialogModes.NO - трансформация без участия пользователя
 /**======================================================================== */
-const ver = 0.13,
+const ver = 0.14,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
@@ -22,7 +22,8 @@ const ver = 0.13,
     INIT_DELAY = 8000,
     INSTALL_DELAY = 150000,
     DETECTION_DELAY = 8000,
-    PROGRESS_DELAY = 2500;
+    PROGRESS_DELAY = 2500,
+    PING_DELAY = 100;
 var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new File($.fileName)).path + '/' + API_FILE)),
     s2t = stringIDToTypeID,
     t2s = typeIDToStringID,
@@ -33,9 +34,8 @@ var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new Fil
 $.localize = true
 try {
     var targetLayers = getSelectedLayers();
-    if (targetLayers.length > 1 && fd.exit() && fd.init()) {
+    if (targetLayers.length > 1 && fd.init()) {
         app.doForcedProgress("Detect faces", "getFacePoints(targetLayers)")
-        fd.exit()
         if (targetLayers[0] instanceof Object)
             app.activeDocument.suspendHistory("Face alignment", (dialog_mode == DialogModes.ALL ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")'))
         else throw new Error(str.errBaseLayer)
@@ -241,19 +241,18 @@ function AM(target, order) {
 }
 function faceApi(apiHost, portSend, portListen, apiFile) {
     this.init = function () {
-        if (!apiFile.exists) throw new Error(str.errModule)
-        apiFile.execute();
-        var result = sendMessage({}, INIT_DELAY, false, true);
-        if (!result) throw new Error(str.errConnection) else {
-            if (result.message = 'init') {
-                var result = sendMessage({}, INSTALL_DELAY, false, true, 'Starting face recognition module...');
-                if (!result) throw new Error(str.errStarting)
+        var result = sendMessage({ type: 'handshake', message: '' }, PING_DELAY, true, true)
+        if (!result) {
+            if (!apiFile.exists) throw new Error(str.errModule)
+            apiFile.execute();
+            var result = sendMessage({}, INIT_DELAY, false, true);
+            if (!result) throw new Error(str.errConnection) else {
+                if (result.message = 'init') {
+                    var result = sendMessage({}, INSTALL_DELAY, false, true, 'Starting face recognition module...');
+                    if (!result) throw new Error(str.errStarting)
+                }
             }
         }
-        return true
-    }
-    this.exit = function () {
-        sendMessage({ type: 'exit' }, INIT_DELAY, true, false)
         return true
     }
     this.sendPayload = function (payload) {

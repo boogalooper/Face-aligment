@@ -4,6 +4,23 @@ import subprocess
 import socket
 import json
 
+API_HOST = "127.0.0.1"
+API_PORT_SEND = 6311
+API_PORT_LISTEN = 6310
+
+
+def send_data_to_jsx(obj):
+    """Отправка ответа обратно"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((API_HOST, API_PORT_SEND))
+        s.send(json.dumps(obj).encode("utf-8"))
+        s.close()
+    except Exception as e:
+        print("[ERROR] Ошибка отправки ответа:", e)
+        sys.exit()
+
+
 def install_if_missing(package, import_name=None):
     if import_name is None:
         import_name = package
@@ -19,27 +36,14 @@ def install_if_missing(package, import_name=None):
             raise
         print(f"[INFO] Модуль '{package}' успешно установлен.")
 
+
+send_data_to_jsx({"type": "answer", "message": "init"})
 install_if_missing("mediapipe")
 install_if_missing("opencv-python", "cv2")
 install_if_missing("numpy")
 import cv2
 import mediapipe as mp
 import numpy as np
-
-API_HOST = "127.0.0.1"
-API_PORT_SEND = 6311
-API_PORT_LISTEN = 6310
-
-def send_data_to_jsx(obj):
-    """Отправка ответа обратно"""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((API_HOST, API_PORT_SEND))
-        s.send(json.dumps(obj).encode("utf-8"))
-        s.close()
-    except Exception as e:
-        print("[ERROR] Ошибка отправки ответа:", e)
-        sys.exit()
 
 
 def detect_face_landmarks(image_path):

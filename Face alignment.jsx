@@ -1,34 +1,47 @@
+/*<javascriptresource>
+<category>alignment</category>
+<enableinfo>true</enableinfo>
+</javascriptresource>
+*/
 #target photoshop
 const moveMode = true// false - выравнивание центра лиц выключено, true - включено
 const transformMode = true // false - масштабирование выключено, true - включено
 const rotateMode = true // false - поворот головы выключен, true - включен
 const angle_ratio = 0.5 // 0-1 - коэффициент применяемый к углу наклона головы
 const global_scale = 0.25 // 0-1 - коэффициент масштабирования для ускорения работы со слоями
-const ver = 0.1,
+const dialog_mode = DialogModes.NO // DialogModes.ALL - интерактивная траснформация, DialogModes.NO - трансформация без участия пользователя
+const ver = 0.13,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
     API_FILE = 'face-detect-api.pyw',
-    INIT_DELAY = 5000,
-    DETECTION_DELAY = 8000;
+    INIT_DELAY = 8000,
+    INSTALL_DELAY = 150000,
+    DETECTION_DELAY = 8000,
+    PROGRESS_DELAY = 2500;
 var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new File($.fileName)).path + '/' + API_FILE)),
     s2t = stringIDToTypeID,
     t2s = typeIDToStringID,
     apl = new AM('application'),
     doc = new AM('document'),
-    lr = new AM('layer');
-var targetLayers = getSelectedLayersIDs(),
-    len = targetLayers.length;
-if (len > 1 && fd.exit() && fd.init()) {
-    var selectedLayers = targetLayers.slice(1);
-    app.doForcedProgress("Detect faces", "getFaceBounds(targetLayers)")
-    fd.exit()
-    if (targetLayers[0] instanceof Object) {
-        app.activeDocument.suspendHistory("Face alignment", 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")')
-    }
-}
+    lr = new AM('layer'),
+    str = new Locale();
+$.localize = true
+try {
+    var targetLayers = getSelectedLayersIDs(),
+        len = targetLayers.length;
+    if (len > 1 && fd.exit() && fd.init()) {
+        var selectedLayers = targetLayers.slice(1);
+        app.doForcedProgress("Detect faces", "getFaceBounds(targetLayers)")
+        fd.exit()
+        if (targetLayers[0] instanceof Object) {
+            dialog_mode == DialogModes.ALL ? app.activeDocument.suspendHistory("Face alignment", 'transformLayers(targetLayers, targetLayers.shift())') :
+                app.activeDocument.suspendHistory("Face alignment", 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")');
+        }
+    } else { throw new Error(str.errLr) }
+} catch (e) { alert(e, str.err) }
 function getSelectedLayersIDs() {
-    if (!apl.getProperty("numberOfDocuments")) return []
+    if (!apl.getProperty("numberOfDocuments")) throw new Error(str.errDoc)
     var sel = doc.getProperty("targetLayersIDs"),
         len = sel.count,
         output = []
@@ -96,13 +109,13 @@ function transformLayers(targetLayers, baseLayer) {
             doc.selectLayers([targetLayers[i].id])
             app.updateProgress(i + 1, len)
             if (targetLayers[i] instanceof Object) {
-                var dX = baseLayer.measurement.middle[0] - targetLayers[i].measurement.middle[0],
-                    dY = baseLayer.measurement.middle[1] - targetLayers[i].measurement.middle[1],
+                var dX = moveMode ? baseLayer.measurement.middle[0] - targetLayers[i].measurement.middle[0] : 0,
+                    dY = moveMode ? baseLayer.measurement.middle[1] - targetLayers[i].measurement.middle[1] : 0,
                     dW = 100 * (baseLayer.width / targetLayers[i].width),
                     dH = 100 * (baseLayer.height / targetLayers[i].height),
                     scale = dH > dW ? dH : dW;
-                lr.transform(transformMode ? scale : 100, targetLayers[i].measurement.middle[0], targetLayers[i].measurement.middle[1], rotateMode ? -targetLayers[i].angle * angle_ratio : 0)
-                if (moveMode) lr.move(dX, dY)
+                lr.move(dX, dY);
+                lr.transform(transformMode ? scale : 100, targetLayers[i].measurement.middle[0], targetLayers[i].measurement.middle[1], rotateMode ? -targetLayers[i].angle * angle_ratio : 0, dialog_mode)
             }
         }
     }
@@ -202,6 +215,7 @@ function AM(target, order) {
         executeAction(s2t("imageSize"), d, DialogModes.NO);
     }
     this.transform = function (scale, cX, cY, angle, dialogMode) {
+        dialogMode == DialogModes.ALL ? DialogModes.ALL : DialogModes.NO
         var d = new ActionDescriptor(),
             d1 = new ActionDescriptor(),
             r = new ActionReference();
@@ -215,7 +229,7 @@ function AM(target, order) {
         d.putUnitDouble(s2t('height'), s2t('percentUnit'), scale)
         d.putUnitDouble(s2t('angle'), s2t('angleUnit'), angle)
         d.putEnumerated(s2t('interfaceIconFrameDimmed'), s2t('interpolationType'), s2t('bicubic'))
-        executeAction(s2t('transform'), d, DialogModes.NO)
+        executeAction(s2t('transform'), d, dialogMode)
     }
     this.move = function (dX, dY) {
         (r = new ActionReference()).putEnumerated(s2t("layer"), s2t("ordinal"), s2t("targetEnum"));
@@ -245,10 +259,15 @@ function AM(target, order) {
 }
 function faceApi(apiHost, portSend, portListen, apiFile) {
     this.init = function () {
-        if (!apiFile.exists) return false
+        if (!apiFile.exists) throw new Error(str.errModule)
         apiFile.execute();
         var result = sendMessage({}, INIT_DELAY, false, true);
-        if (!result) return false
+        if (!result) throw new Error(str.errConnection) else {
+            if (result.message = 'init') {
+                var result = sendMessage({}, INSTALL_DELAY, false, true, 'Starting face recognition module...');
+                if (!result) throw new Error(str.errStarting)
+            }
+        }
         return true
     }
     this.exit = function () {
@@ -260,7 +279,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         if (result) return result['message']
         return null;
     }
-    function sendMessage(o, delay, sendData, getData) {
+    function sendMessage(o, delay, sendData, getData, title) {
         var tcp = new Socket,
             delay = delay ? delay : INIT_DELAY;
         if (sendData) {
@@ -269,19 +288,37 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
             tcp.close()
         }
         if (getData) {
+            if (title) {
+                var w = new Window('palette', title),
+                    bar = w.add('progressbar', undefined, 0, PROGRESS_DELAY);
+                bar.preferredSize = [350, 20];
+                bar.value = 0;
+                w.show();
+            }
             var tcp = new Socket,
                 t1 = (new Date).getTime(),
-                t2 = 0;
+                t2 = 0,
+                t3 = t1;
             if (tcp.listen(portListen, 'UTF-8')) {
                 for (; ;) {
                     t2 = (new Date).getTime();
                     if (t2 - t1 > delay) {
+                        if (title) w.close();
                         return null;
+                    }
+                    if (title && t2 - t3 > 100) {
+                        t3 = t2
+                        if (bar.value >= PROGRESS_DELAY) bar.value = 0;
+                        bar.value = bar.value + 100;
+                        w.update();
                     }
                     var answer = tcp.poll();
                     if (answer != null) {
                         var a = eval('(' + answer.readln() + ')');
                         answer.close();
+                        if (title) {
+                            w.close()
+                        }
                         return a;
                     }
                 }
@@ -318,4 +355,12 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         }
         return '{' + result.join(',') + '}';
     }
+}
+function Locale() {
+    this.err = { ru: 'Скрипт остановлен', en: 'Script stopped' }
+    this.errDoc = { ru: 'Нет активного документа!', en: 'No active document!' }
+    this.errLr = { ru: '2 и более слоя должны быть выбраны: нижний слой является образцом размера, остальные будут выровнены по образцу. Слои должны быть незаблокированными!', en: 'Two or more layers must be selected: the bottom layer is the size sample, the others will be aligned to the sample. The layers must be unlocked!' }
+    this.errModule = { ru: 'Модуль ' + API_FILE + ' не найден! Убедитесь, что он находится в той же папке что и скрипт!', en: 'Module ' + API_FILE + ' not found! Make sure it in the same folder as the script!' }
+    this.errConnection = { ru: 'Невозможно установить соединение c ' + API_FILE, en: 'Impossible to establish a connection with ' + API_FILE }
+    this.errStarting = { ru: 'Превышено время ожидания ответа инициализации модуля распознавания лиц! Попробуйте еще раз.', en: 'The face recognition module has timed out initializing! Please try again.' }
 }

@@ -14,7 +14,7 @@ const angle_ratio = 0.75 // 0-1 - коэффициент применяемый 
 const detect_size = 1024 // размер изображения по большей стороне отправляемый детектору лиц
 const dialog_mode = DialogModes.NO // DialogModes.ALL - интерактивная траснформация, DialogModes.NO - трансформация без участия пользователя
 /**======================================================================== */
-const ver = 0.12,
+const ver = 0.121,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
@@ -35,9 +35,9 @@ $.localize = true
 try {
     var targetLayers = getSelectedLayers();
     if (targetLayers.length > 1 && fd.init()) {
-        app.doForcedProgress("Detect faces", "getFacePoints(targetLayers)")
+        targetLayers.length <= 2 ? getFacePoints(targetLayers) : app.doForcedProgress("Detect faces", "getFacePoints(targetLayers)");
         if (targetLayers[0] instanceof Object)
-            app.activeDocument.suspendHistory("Face alignment", (dialog_mode == DialogModes.ALL ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")'))
+            app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || dialog_mode == DialogModes.ALL ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")'))
         else throw new Error(str.errBaseLayer)
     } else { throw new Error(str.errLr) }
 } catch (e) { alert(e, str.err) }

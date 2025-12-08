@@ -11,10 +11,10 @@ const moveMode = true// false - выравнивание центра лиц в�
 const transformMode = true // false - масштабирование выключено, true - включено
 const rotateMode = true // false - поворот головы выключен, true - включен
 const angle_ratio = 0.75 // 0-1 - коэффициент применяемый к углу наклона головы
-const global_scale = 0.25 // 0-1 - коэффициент масштабирования для ускорения работы со слоями
+const detect_size = 1024 // размер изображения по большей стороне отправляемый детектору лиц
 const dialog_mode = DialogModes.NO // DialogModes.ALL - интерактивная траснформация, DialogModes.NO - трансформация без участия пользователя
 /**======================================================================== */
-const ver = 0.14,
+const ver = 0.12,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
@@ -67,22 +67,26 @@ function getFacePoints(lrs) {
         if (measurement.middle) lrs[i] = new convertToAbsolute(lrs[i], measurement)
     }
     function measureFace(o) {
+        if (lr.hasProperty('smartObject')) lr.rasterize();
         lr.convertToSmartObject()
         lr.editSmartObject()
         doc.flatten()
         doc.convertToRGB()
-        doc.setScale(global_scale)
-        var f = new File(Folder.temp + '/FD.jpg'),
-            k = 1 / global_scale;
+        var docRes = doc.getProperty('resolution'),
+            docW = doc.getProperty('width') * docRes / 72,
+            docH = doc.getProperty('height') * docRes / 72,
+            f = new File(Folder.temp + '/FD.jpg'),
+            k = detect_size / (docW > docH ? docW : docH);
+        k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
         doc.close()
         var faceMesh = fd.sendPayload(f.fsName.replace(/\\/g, '\\\\'));
         if (faceMesh && faceMesh[263] && faceMesh[33] && faceMesh[152] && faceMesh[127] && faceMesh[356]) {
-            o['left'] = [faceMesh[33][0] * k, faceMesh[33][1] * k]
-            o['right'] = [faceMesh[263][0] * k, faceMesh[263][1] * k]
-            o['bottom'] = [faceMesh[152][0] * k, faceMesh[152][1] * k]
-            o['faceLeft'] = [faceMesh[127][0] * k, faceMesh[127][1] * k]
-            o['faceRight'] = [faceMesh[356][0] * k, faceMesh[356][1] * k]
+            o['left'] = [faceMesh[33][0] * 1 / k, faceMesh[33][1] * 1 / k]
+            o['right'] = [faceMesh[263][0] * 1 / k, faceMesh[263][1] * 1 / k]
+            o['bottom'] = [faceMesh[152][0] * 1 / k, faceMesh[152][1] * 1 / k]
+            o['faceLeft'] = [faceMesh[127][0] * 1 / k, faceMesh[127][1] * 1 / k]
+            o['faceRight'] = [faceMesh[356][0] * 1 / k, faceMesh[356][1] * 1 / k]
             o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
         }
         function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
@@ -220,6 +224,11 @@ function AM(target, order) {
         d1.putUnitDouble(s2t("vertical"), s2t("pixelsUnit"), dY);
         d.putObject(s2t("to"), s2t("offset"), d1);
         executeAction(s2t("move"), d, DialogModes.NO);
+    }
+    this.rasterize = function () {
+        (r = new AR).putEnumerated(s2t('layer'), s2t('ordinal'), s2t('targetEnum'));
+        (d = new AD).putReference(s2t('target'), r);
+        executeAction(s2t('rasterizeLayer'), d, DialogModes.NO);
     }
     function getDescValue(d, p) {
         switch (d.getType(p)) {

@@ -1,12 +1,10 @@
 @echo off
 echo ===============================
-echo Installing Python dependencies
+echo Installing/Updating Python dependencies
 echo ===============================
 
 python -m pip install --upgrade pip
-python -m pip install mediapipe
-python -m pip install opencv-python
-python -m pip install numpy
+python -m pip install --upgrade mediapipe opencv-python numpy
 
 echo.
 echo ===============================

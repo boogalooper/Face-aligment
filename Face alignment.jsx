@@ -11,7 +11,7 @@ const moveMode = true// false - выравнивание центра лиц в�
 const transformMode = true // false - масштабирование выключено, true - включено
 const rotateMode = true // false - поворот головы выключен, true - включен
 const angle_ratio = 0.75 // 0-1 - коэффициент применяемый к углу наклона головы
-const detect_size = 2048 // размер изображения по большей стороне отправляемый детектору лиц
+const detect_size = 1024 // размер изображения по большей стороне отправляемый детектору лиц
 const dialog_mode = DialogModes.NO // DialogModes.ALL - интерактивная траснформация, DialogModes.NO - трансформация без участия пользователя
 /**======================================================================== */
 const ver = 0.121,
@@ -63,6 +63,7 @@ function getFacePoints(lrs) {
         var measurement = {};
         measurement['bounds'] = lr.descToObject(lr.getProperty("boundsNoEffects", lrs[i]).value);
         app.activeDocument.suspendHistory("Measure Face", "measureFace (measurement)")
+        if (i==0 && measurement.middle==undefined) throw new Error(str.errBaseLayer)
         doc.selectPreviousHistoryState()
         if (measurement.middle) lrs[i] = new convertToAbsolute(lrs[i], measurement)
     }
@@ -81,6 +82,7 @@ function getFacePoints(lrs) {
         doc.saveACopy(f)
         doc.close()
         var faceMesh = fd.sendPayload(f.fsName.replace(/\\/g, '\\\\'));
+        
         if (faceMesh && faceMesh[263] && faceMesh[33] && faceMesh[152] && faceMesh[127] && faceMesh[356]) {
             o['left'] = [faceMesh[33][0] * 1 / k, faceMesh[33][1] * 1 / k]
             o['right'] = [faceMesh[263][0] * 1 / k, faceMesh[263][1] * 1 / k]
@@ -88,7 +90,7 @@ function getFacePoints(lrs) {
             o['faceLeft'] = [faceMesh[127][0] * 1 / k, faceMesh[127][1] * 1 / k]
             o['faceRight'] = [faceMesh[356][0] * 1 / k, faceMesh[356][1] * 1 / k]
             o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
-        }
+        } 
         function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
     }
     function convertToAbsolute(id, points) {
@@ -259,6 +261,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
                 if (result.message = 'init') {
                     var result = sendMessage({}, INSTALL_DELAY, false, true, 'Starting face recognition module...');
                     if (!result) throw new Error(str.errStarting)
+                    if (result.type == 'error') throw new Error(result.message)
                 }
             }
         }
@@ -266,7 +269,8 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     }
     this.sendPayload = function (payload) {
         var result = sendMessage({ type: 'payload', message: payload }, DETECTION_DELAY, true, true)
-        if (result) return result['message']
+        if (result.type == 'answer') return result['message']
+        if (result.type == 'error') throw new Error(result.message)
         return null;
     }
     function sendMessage(o, delay, sendData, getData, title) {

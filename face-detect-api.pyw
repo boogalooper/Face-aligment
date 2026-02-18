@@ -37,72 +37,75 @@ def get_detector():
             return detector
 
         if not os.path.exists(MODEL_PATH):
-            print("[ERROR] face_landmarker.task не найден рядом со скриптом.")
+            error_msg = "face_landmarker.task не найден."
+            print(error_msg)
+            send_data_to_jsx({"type": "error", "message": error_msg})
             sys.exit(1)
 
-        print("[INFO] Инициализация FaceLandmarker...")
+        try:
+            print("[INFO] Инициализация FaceLandmarker...")
 
-        base_options = python.BaseOptions(
-            model_asset_path=MODEL_PATH
-        )
+            base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
+            options = vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                running_mode=vision.RunningMode.IMAGE,
+                num_faces=1,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False
+            )
 
-        options = vision.FaceLandmarkerOptions(
-            base_options=base_options,
-            running_mode=vision.RunningMode.IMAGE,
-            num_faces=1,
-            output_face_blendshapes=False,
-            output_facial_transformation_matrixes=False
-        )
+            detector = vision.FaceLandmarker.create_from_options(options)
+            print("[INFO] FaceLandmarker инициализирован.")
+            return detector
 
-        detector = vision.FaceLandmarker.create_from_options(options)
-
-        print("[INFO] FaceLandmarker инициализирован.")
-        return detector
-
+        except Exception as e:
+            error_msg = f"Ошибка инициализации FaceLandmarker: {e}"
+            print(error_msg)
+            send_data_to_jsx({"type": "error", "message": error_msg})
+            sys.exit(1)
 
 def detect_face_landmarks(image_path):
-    print("[INFO] Загружаю:", image_path)
+    try:
+        print("[INFO] Загружаю:", image_path)
 
-    if not os.path.exists(image_path):
-        print("[ERROR] Файл не найден")
-        return {}
+        if not os.path.exists(image_path):
+            error_msg = "Файл не найден"
+            print(error_msg)
+            send_data_to_jsx({"type": "error", "message": error_msg})
+            return {}
 
-    img = cv2.imread(image_path)
-    if img is None:
-        print("[ERROR] Ошибка чтения изображения")
-        return {}
+        img = cv2.imread(image_path)
+        if img is None:
+            error_msg = "Ошибка чтения изображения"
+            print(error_msg)
+            send_data_to_jsx({"type": "error", "message": error_msg})
+            return {}
 
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-    mp_image = mp.Image(
-        image_format=mp.ImageFormat.SRGB,
-        data=rgb
-    )
+        detector_instance = get_detector()
+        result = detector_instance.detect(mp_image)
 
-    detector_instance = get_detector()
-    result = detector_instance.detect(mp_image)
+        if not result.face_landmarks:
+            print("[INFO] Лицо не найдено")
+            safe_remove(image_path)
+            return {}
 
-    if not result.face_landmarks:
-        print("[INFO] Лицо не найдено")
+        h, w, _ = img.shape
+        face = result.face_landmarks[0]
+        points = {str(i): (int(landmark.x * w), int(landmark.y * h)) for i, landmark in enumerate(face)}
+
+        print(f"[INFO] Найдено точек: {len(points)}")
         safe_remove(image_path)
+        return points
+
+    except Exception as e:
+        error_msg = f"Ошибка при распознавании лица: {e}"
+        print(error_msg)
+        send_data_to_jsx({"type": "error", "message": error_msg})
         return {}
-
-    h, w, _ = img.shape
-    face = result.face_landmarks[0]
-
-    points = {
-        str(i): (
-            int(landmark.x * w),
-            int(landmark.y * h)
-        )
-        for i, landmark in enumerate(face)
-    }
-
-    print(f"[INFO] Найдено точек: {len(points)}")
-
-    safe_remove(image_path)
-    return points
-
+    
 def safe_remove(path):
     try:
         os.remove(path)
@@ -119,7 +122,6 @@ def timeout_watcher():
             print("[INFO] Сервер простаивал → завершение")
             os._exit(0)
 
-
 def send_data_to_jsx(obj):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -127,8 +129,6 @@ def send_data_to_jsx(obj):
             s.send(json.dumps(obj).encode("utf-8"))
     except Exception as e:
         print("[ERROR] Ошибка отправки:", e)
-
-send_data_to_jsx({"type": "answer", "message": "init"})
 
 def start_server():
     global last_request_time
@@ -168,13 +168,13 @@ def start_server():
 
                 elif msg_type == "handshake":
                     send_data_to_jsx({"type": "answer", "message": "success"})
-
         except Exception as e:
-            print("[ERROR]", e)
-            send_data_to_jsx({"type": "answer", "message": None})
-
+            error_msg = f"Сервер: {e}"
+            print(error_msg)
+            send_data_to_jsx({"type": "error", "message": error_msg})
 
 if __name__ == "__main__":
     print("[INFO] Скрипт запущен")
+    send_data_to_jsx({"type": "answer", "message": "init"})
     get_detector()  # предзагрузка и кэширование
     start_server()

@@ -1,151 +1,180 @@
 import os
 import sys
-import subprocess
 import socket
 import json
 import time
 import threading
+import cv2
+import numpy as np
+
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+import mediapipe as mp
 
 API_HOST = "127.0.0.1"
 API_PORT_SEND = 6311
 API_PORT_LISTEN = 6310
 
-TIMEOUT = 5*60  # 5 минут
+TIMEOUT = 5 * 60
 last_request_time = time.time()
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LIB_DIR = os.path.join(BASE_DIR, "lib")
+MODEL_PATH = os.path.join(LIB_DIR, "face_landmarker.task")
 
+detector = None
+detector_lock = threading.Lock()
+
+# SAFE INITIALIZATION (CACHE + PROTECTION)
+def get_detector():
+    global detector
+
+    if detector is not None:
+        return detector
+
+    with detector_lock:
+        if detector is not None:
+            return detector
+
+        if not os.path.exists(MODEL_PATH):
+            print("[ERROR] face_landmarker.task не найден рядом со скриптом.")
+            sys.exit(1)
+
+        print("[INFO] Инициализация FaceLandmarker...")
+
+        base_options = python.BaseOptions(
+            model_asset_path=MODEL_PATH
+        )
+
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=1,
+            output_face_blendshapes=False,
+            output_facial_transformation_matrixes=False
+        )
+
+        detector = vision.FaceLandmarker.create_from_options(options)
+
+        print("[INFO] FaceLandmarker инициализирован.")
+        return detector
+
+
+def detect_face_landmarks(image_path):
+    print("[INFO] Загружаю:", image_path)
+
+    if not os.path.exists(image_path):
+        print("[ERROR] Файл не найден")
+        return {}
+
+    img = cv2.imread(image_path)
+    if img is None:
+        print("[ERROR] Ошибка чтения изображения")
+        return {}
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=rgb
+    )
+
+    detector_instance = get_detector()
+    result = detector_instance.detect(mp_image)
+
+    if not result.face_landmarks:
+        print("[INFO] Лицо не найдено")
+        safe_remove(image_path)
+        return {}
+
+    h, w, _ = img.shape
+    face = result.face_landmarks[0]
+
+    points = {
+        str(i): (
+            int(landmark.x * w),
+            int(landmark.y * h)
+        )
+        for i, landmark in enumerate(face)
+    }
+
+    print(f"[INFO] Найдено точек: {len(points)}")
+
+    safe_remove(image_path)
+    return points
+
+def safe_remove(path):
+    try:
+        os.remove(path)
+        print("[INFO] Временный файл удалён.")
+    except Exception:
+        pass
+
+# SERVER
 def timeout_watcher():
     global last_request_time
     while True:
         time.sleep(5)
         if time.time() - last_request_time > TIMEOUT:
-            print("[INFO] Сервер простаивал 10 минут → завершаюсь")
+            print("[INFO] Сервер простаивал → завершение")
             os._exit(0)
 
 
 def send_data_to_jsx(obj):
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((API_HOST, API_PORT_SEND))
-        s.send(json.dumps(obj).encode("utf-8"))
-        s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((API_HOST, API_PORT_SEND))
+            s.send(json.dumps(obj).encode("utf-8"))
     except Exception as e:
-        print("[ERROR] Ошибка отправки ответа:", e)
-        sys.exit(0)
-
-
-def install_if_missing(package, import_name=None):
-    if import_name is None:
-        import_name = package
-    try:
-        __import__(import_name)
-        return
-    except ImportError:
-        print(f"[INFO] Модуль '{import_name}' не найден. Устанавливаю '{package}'...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-        except Exception as e:
-            print(f"[ERROR] Не удалось установить {package}: {e}")
-            raise
-        print(f"[INFO] Модуль '{package}' успешно установлен.")
-
+        print("[ERROR] Ошибка отправки:", e)
 
 send_data_to_jsx({"type": "answer", "message": "init"})
-install_if_missing("mediapipe")
-install_if_missing("opencv-python", "cv2")
-install_if_missing("numpy")
-import cv2
-import mediapipe as mp
-import numpy as np
-
-
-def detect_face_landmarks(image_path):
-    print("[INFO] Загружаю изображение:", image_path)
-    if not os.path.exists(image_path):
-        print("[ERROR] Файл не найден")
-        return {}
-    img = cv2.imread(image_path)
-    if img is None:
-        print("[ERROR] Невозможно прочитать изображение")
-        return {}
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    mp_face_mesh = mp.solutions.face_mesh
-    print("[INFO] Инициализация MediaPipe FaceMesh...")
-    try:
-        with mp_face_mesh.FaceMesh(
-            static_image_mode=True, max_num_faces=1, refine_landmarks=True
-        ) as face_mesh:
-            result = face_mesh.process(rgb)
-            if not result.multi_face_landmarks:
-                print("[INFO] Лицо не найдено")
-                return {}
-            print("[INFO] Лицо найдено, извлекаю точки...")
-            h, w, _ = img.shape
-            face = result.multi_face_landmarks[0]
-            points = {
-                str(i): (int(lm.x * w), int(lm.y * h))
-                for i, lm in enumerate(face.landmark)
-            }
-            print(f"[INFO] Найдено точек: {len(points)}")
-            return points
-    finally:
-        try:
-            print("[INFO] Удаляю временный файл...")
-            os.remove(image_path)
-            print("[INFO] Файл удалён.")
-        except Exception as e:
-            print("[WARNING] Не удалось удалить файл:", e)
-
 
 def start_server():
     global last_request_time
 
-    print("[INFO] Запуск сервера", API_HOST, API_PORT_LISTEN)
+    print("[INFO] Запуск сервера:", API_HOST, API_PORT_LISTEN)
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((API_HOST, API_PORT_LISTEN))
-    server.listen(1)
+    server.listen(5)
 
     send_data_to_jsx({"type": "answer", "message": "success"})
-    print("[INFO] Handshake → OK")
+    print("[INFO] Handshake OK")
 
     threading.Thread(target=timeout_watcher, daemon=True).start()
 
     while True:
         try:
             client_socket, addr = server.accept()
-            last_request_time = time.time()  # обновление таймера
-            print("[INFO] Клиент подключен:", addr)
+            last_request_time = time.time()
 
-            raw = client_socket.recv(4096)
-            message = json.loads(raw.decode("utf-8"))
-            print("[INFO] Получено:", message)
+            with client_socket:
+                raw = client_socket.recv(8192)
+                message = json.loads(raw.decode("utf-8"))
 
-            if message["type"] == "payload":
-                filepath = message["message"]
-                print("[INFO] Получен путь к файлу:", filepath)
-                try:
+                msg_type = message.get("type")
+
+                if msg_type == "payload":
+                    filepath = message.get("message")
                     points = detect_face_landmarks(filepath)
                     send_data_to_jsx({"type": "answer", "message": points})
-                except Exception as e:
-                    print("[ERROR] Ошибка обработки:", e)
-                    send_data_to_jsx({"type": "answer", "message": None})
 
-            if message["type"] == "exit":
-                print("[INFO] Остановка сервера")
-                server.close()
-                sys.exit()
+                elif msg_type == "exit":
+                    print("[INFO] Завершение сервера")
+                    server.close()
+                    sys.exit()
 
-            if message["type"] == "handshake":
-                send_data_to_jsx({"type": "answer", "message": "success"})
-                print("[INFO] Handshake → OK")
+                elif msg_type == "handshake":
+                    send_data_to_jsx({"type": "answer", "message": "success"})
 
         except Exception as e:
-            print(f"Произошла ошибка: {e}")
+            print("[ERROR]", e)
             send_data_to_jsx({"type": "answer", "message": None})
-            sys.exit()
 
 
 if __name__ == "__main__":
     print("[INFO] Скрипт запущен")
+    get_detector()  # предзагрузка и кэширование
     start_server()
-    print("[INFO] Скрипт завершён")

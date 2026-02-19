@@ -26,21 +26,25 @@ const ver = 0.121,
     PING_DELAY = 100;
 var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new File($.fileName)).path + '/' + API_FILE)),
     s2t = stringIDToTypeID,
-    t2s = typeIDToStringID,
     apl = new AM('application'),
     doc = new AM('document'),
     lr = new AM('layer'),
-    str = new Locale();
+    str = new Locale(),
+    curentState = doc.getSelectionMode();
+
 $.localize = true
 try {
     var targetLayers = getSelectedLayers();
     if (targetLayers.length > 1 && fd.init()) {
+        if (curentState == 'imageProcessingModeCloud') doc.setSelectionMode('imageProcessingModeDevice');
         targetLayers.length <= 2 ? getFacePoints(targetLayers) : app.doForcedProgress("Detect faces", "getFacePoints(targetLayers)");
         if (targetLayers[0] instanceof Object)
             app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || dialog_mode == DialogModes.ALL ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")'))
         else throw new Error(str.errBaseLayer)
     } else { throw new Error(str.errLr) }
 } catch (e) { alert(e, str.err) }
+doc.setSelectionMode(curentState);
+
 function getSelectedLayers() {
     if (!apl.getProperty("numberOfDocuments")) throw new Error(str.errDoc)
     var sel = doc.getProperty("targetLayersIDs"),
@@ -63,7 +67,7 @@ function getFacePoints(lrs) {
         var measurement = {};
         measurement['bounds'] = lr.descToObject(lr.getProperty("boundsNoEffects", lrs[i]).value);
         app.activeDocument.suspendHistory("Measure Face", "measureFace (measurement)")
-        if (i==0 && measurement.middle==undefined) throw new Error(str.errBaseLayer)
+        if (i == 0 && measurement.middle == undefined) throw new Error(str.errBaseLayer)
         doc.selectPreviousHistoryState()
         if (measurement.middle) lrs[i] = new convertToAbsolute(lrs[i], measurement)
     }
@@ -80,9 +84,9 @@ function getFacePoints(lrs) {
             k = detect_size / (docW > docH ? docW : docH);
         k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
-        doc.close()
+
         var faceMesh = fd.sendPayload(f.fsName.replace(/\\/g, '\\\\'));
-        
+
         if (faceMesh && faceMesh[263] && faceMesh[33] && faceMesh[152] && faceMesh[127] && faceMesh[356]) {
             o['left'] = [faceMesh[33][0] * 1 / k, faceMesh[33][1] * 1 / k]
             o['right'] = [faceMesh[263][0] * 1 / k, faceMesh[263][1] * 1 / k]
@@ -90,8 +94,30 @@ function getFacePoints(lrs) {
             o['faceLeft'] = [faceMesh[127][0] * 1 / k, faceMesh[127][1] * 1 / k]
             o['faceRight'] = [faceMesh[356][0] * 1 / k, faceMesh[356][1] * 1 / k]
             o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
-        } 
+        } else {
+            doc.selectSubject();
+            if (doc.getProperty('selection')) {
+                var relativeBounds = doc.descToObject(doc.getProperty('selection').value);
+                dX = relativeBounds.left, dY = relativeBounds.top;
+                doc.crop(true)
+                doc.saveACopy(f)
+                var faceMesh = fd.sendPayload(f.fsName.replace(/\\/g, '\\\\'));
+                if (faceMesh && faceMesh[263] && faceMesh[33] && faceMesh[152] && faceMesh[127] && faceMesh[356]) {
+                    o['left'] = [(faceMesh[33][0] + dX) * 1 / k, (faceMesh[33][1] + dY) * 1 / k]
+                    o['right'] = [(faceMesh[263][0] + dX) * 1 / k, (faceMesh[263][1] + dY) * 1 / k]
+                    o['bottom'] = [(faceMesh[152][0] + dX) * 1 / k, (faceMesh[152][1] + dY) * 1 / k]
+                    o['faceLeft'] = [(faceMesh[127][0] + dX) * 1 / k, (faceMesh[127][1] + dY) * 1 / k]
+                    o['faceRight'] = [(faceMesh[356][0] + dX) * 1 / k, (faceMesh[356][1] + dY) * 1 / k]
+                    o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
+                }
+            }
+        }
+        doc.close();
+        function calcFacePoints() {
+
+        }
         function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
+
     }
     function convertToAbsolute(id, points) {
         this.id = id
@@ -125,7 +151,7 @@ function transformLayers(targetLayers, baseLayer) {
             lr.transform(transformMode ? scale : 100, targetLayers[i].measurement.middle[0] + dX, targetLayers[i].measurement.middle[1] + dY, rotateMode ? -targetLayers[i].angle * angle_ratio : 0, dialog_mode)
         }
     }
-    doc.selectLayers(tmp)
+    if (tmp.length) doc.selectLayers(tmp)
 }
 function AM(target, order) {
     var s2t = stringIDToTypeID,
@@ -231,6 +257,28 @@ function AM(target, order) {
         (r = new AR).putEnumerated(s2t('layer'), s2t('ordinal'), s2t('targetEnum'));
         (d = new AD).putReference(s2t('target'), r);
         executeAction(s2t('rasterizeLayer'), d, DialogModes.NO);
+    }
+    this.getSelectionMode = function () {
+        (r = new ActionReference()).putProperty(s2t('property'), p = s2t('imageProcessingPrefs'));
+        r.putEnumerated(s2t('application'), s2t('ordinal'), s2t('targetEnum'));
+        return t2s(executeActionGet(r).getObjectValue(p).getEnumerationValue(s2t('imageProcessingSelectSubjectPrefs')));
+    }
+    this.setSelectionMode = function (state) {
+        (r = new ActionReference()).putProperty(s2t("property"), s2t("imageProcessingPrefs"));
+        r.putEnumerated(s2t("application"), s2t("ordinal"), s2t("targetEnum"));
+        (d = new ActionDescriptor()).putReference(s2t("null"), r);
+        (d1 = new ActionDescriptor()).putEnumerated(s2t("imageProcessingSelectSubjectPrefs"), s2t("imageProcessingSelectSubjectPrefs"), s2t(state));
+        d.putObject(s2t("to"), s2t("imageProcessingPrefs"), d1);
+        executeAction(s2t("set"), d, DialogModes.NO);
+    }
+    this.selectSubject = function (sampleAllLayers) {
+        sampleAllLayers = sampleAllLayers == undefined ? false : true;
+        (d = new ActionDescriptor()).putBoolean(s2t('sampleAllLayers'), sampleAllLayers);
+        executeAction(s2t('autoCutout'), d, DialogModes.NO);
+    }
+    this.crop = function (deletePixels) {
+        (d = new AD).putBoolean(s2t('delete'), deletePixels);
+        executeAction(s2t('crop'), d, DialogModes.NO);
     }
     function getDescValue(d, p) {
         switch (d.getType(p)) {

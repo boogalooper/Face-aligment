@@ -1,25 +1,13 @@
 @echo off
 echo ===============================
-echo Installing/Updating Python dependencies
+echo Installing for Python 3.11
 echo ===============================
 
 python -m pip install --upgrade pip
-python -m pip install --upgrade mediapipe opencv-python numpy
 
-echo.
-echo ===============================
-echo Downloading face_landmarker.task into lib folder
-echo ===============================
+python -m pip uninstall -y mediapipe
 
-if not exist lib (
-    mkdir lib
-)
-
-set MODEL_FILE=lib\face_landmarker.task
-set MODEL_URL=https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
-
-powershell -Command ^
-"if (-Not (Test-Path '%MODEL_FILE%')) {Invoke-WebRequest -Uri '%MODEL_URL%' -OutFile '%MODEL_FILE%'; Write-Host 'Model downloaded to lib.'} else {Write-Host 'Model already exists in lib.'}"
+python -m pip install mediapipe==0.10.32 opencv-python --upgrade
 
 echo.
 echo ===============================

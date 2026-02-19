@@ -14,7 +14,7 @@ const angle_ratio = 0.75 // 0-1 - коэффициент применяемый 
 const detect_size = 1024 // размер изображения по большей стороне отправляемый детектору лиц
 const dialog_mode = DialogModes.NO // DialogModes.ALL - интерактивная траснформация, DialogModes.NO - трансформация без участия пользователя
 /**======================================================================== */
-const ver = 0.121,
+const ver = 0.125,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
@@ -31,7 +31,6 @@ var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new Fil
     lr = new AM('layer'),
     str = new Locale(),
     curentState = doc.getSelectionMode();
-
 $.localize = true
 try {
     var targetLayers = getSelectedLayers();
@@ -44,7 +43,6 @@ try {
     } else { throw new Error(str.errLr) }
 } catch (e) { alert(e, str.err) }
 doc.setSelectionMode(curentState);
-
 function getSelectedLayers() {
     if (!apl.getProperty("numberOfDocuments")) throw new Error(str.errDoc)
     var sel = doc.getProperty("targetLayersIDs"),
@@ -84,40 +82,33 @@ function getFacePoints(lrs) {
             k = detect_size / (docW > docH ? docW : docH);
         k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
-
         var faceMesh = fd.sendPayload(f.fsName.replace(/\\/g, '\\\\'));
-
         if (faceMesh && faceMesh[263] && faceMesh[33] && faceMesh[152] && faceMesh[127] && faceMesh[356]) {
-            o['left'] = [faceMesh[33][0] * 1 / k, faceMesh[33][1] * 1 / k]
-            o['right'] = [faceMesh[263][0] * 1 / k, faceMesh[263][1] * 1 / k]
-            o['bottom'] = [faceMesh[152][0] * 1 / k, faceMesh[152][1] * 1 / k]
-            o['faceLeft'] = [faceMesh[127][0] * 1 / k, faceMesh[127][1] * 1 / k]
-            o['faceRight'] = [faceMesh[356][0] * 1 / k, faceMesh[356][1] * 1 / k]
-            o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
+            calcFaceDimensions(o, faceMesh)
         } else {
             doc.selectSubject();
             if (doc.getProperty('selection')) {
                 var relativeBounds = doc.descToObject(doc.getProperty('selection').value);
-                dX = relativeBounds.left, dY = relativeBounds.top;
                 doc.crop(true)
                 doc.saveACopy(f)
                 var faceMesh = fd.sendPayload(f.fsName.replace(/\\/g, '\\\\'));
                 if (faceMesh && faceMesh[263] && faceMesh[33] && faceMesh[152] && faceMesh[127] && faceMesh[356]) {
-                    o['left'] = [(faceMesh[33][0] + dX) * 1 / k, (faceMesh[33][1] + dY) * 1 / k]
-                    o['right'] = [(faceMesh[263][0] + dX) * 1 / k, (faceMesh[263][1] + dY) * 1 / k]
-                    o['bottom'] = [(faceMesh[152][0] + dX) * 1 / k, (faceMesh[152][1] + dY) * 1 / k]
-                    o['faceLeft'] = [(faceMesh[127][0] + dX) * 1 / k, (faceMesh[127][1] + dY) * 1 / k]
-                    o['faceRight'] = [(faceMesh[356][0] + dX) * 1 / k, (faceMesh[356][1] + dY) * 1 / k]
-                    o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
+                    calcFaceDimensions(o, faceMesh, relativeBounds.left, relativeBounds.top)
                 }
             }
         }
         doc.close();
-        function calcFacePoints() {
-
+        function calcFaceDimensions(o, mesh, dX, dY) {
+            dX = dX ? dX : 0;
+            dY = dY ? dY : 0;
+            o['left'] = [(faceMesh[33][0] + dX) * 1 / k, (faceMesh[33][1] + dY) * 1 / k]
+            o['right'] = [(faceMesh[263][0] + dX) * 1 / k, (faceMesh[263][1] + dY) * 1 / k]
+            o['bottom'] = [(faceMesh[152][0] + dX) * 1 / k, (faceMesh[152][1] + dY) * 1 / k]
+            o['faceLeft'] = [(faceMesh[127][0] + dX) * 1 / k, (faceMesh[127][1] + dY) * 1 / k]
+            o['faceRight'] = [(faceMesh[356][0] + dX) * 1 / k, (faceMesh[356][1] + dY) * 1 / k]
+            o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
         }
         function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
-
     }
     function convertToAbsolute(id, points) {
         this.id = id
@@ -152,6 +143,11 @@ function transformLayers(targetLayers, baseLayer) {
         }
     }
     if (tmp.length) doc.selectLayers(tmp)
+}
+function debug(mesh) {
+    for (a in mesh) {
+        doc.addCounter(mesh[a][0], mesh[a][1])
+    }
 }
 function AM(target, order) {
     var s2t = stringIDToTypeID,
@@ -209,6 +205,11 @@ function AM(target, order) {
     }
     this.flatten = function () {
         executeAction(s2t('flattenImage'), undefined, DialogModes.NO);
+    }
+    this.addCounter = function (x, y) {
+        (d = new ActionDescriptor()).putDouble(s2t("x"), x);
+        d.putDouble(s2t("y"), y);
+        executeAction(s2t("countAdd"), d, DialogModes.NO);
     }
     this.convertToRGB = function () {
         (d = new AD).putClass(s2t('to'), s2t('RGBColorMode'))

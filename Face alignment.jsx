@@ -489,14 +489,9 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         if (!result) {
             if (!apiFile.exists) throw new Error(str.errModule)
             apiFile.execute();
-            var result = sendMessage({}, INIT_DELAY, false, true);
-            if (!result) throw new Error(str.errConnection) else {
-                if (result.message == 'init') {
-                    var result = sendMessage({}, INSTALL_DELAY, false, true, str.starting);
-                    if (!result) throw new Error(str.errStarting)
-                    if (result.type == 'error') throw new Error(result.message)
-                }
-            }
+            var result = sendMessage({}, INIT_DELAY, false, true, str.starting);
+            if (!result) throw new Error(str.errConnection)
+            if (result.type == 'error') throw new Error(result.message)
         }
         return true
     }
@@ -589,7 +584,6 @@ function Locale() {
     this.errLr = { ru: '2 и более слоя должны быть выбраны: нижний слой является образцом размера лица. Слои должны быть незаблокированными!', en: 'Two or more layers must be selected: the bottom layer is the face size sample. The layers must be unlocked!' }
     this.errModule = { ru: 'Модуль ' + API_FILE + ' не найден! Убедитесь, что он находится в той же папке что и скрипт!', en: 'Module ' + API_FILE + ' not found! Make sure it in the same folder as the script!' }
     this.errConnection = { ru: 'Невозможно установить соединение c ' + API_FILE, en: 'Impossible to establish a connection with ' + API_FILE }
-    this.errStarting = { ru: 'Превышено время ожидания ответа модуля python!', en: 'The python module has timed out initializing!' }
     this.errBaseLayer = { ru: 'Ключевые точки не найдены на нижнем слое!', en: 'Key points not found on bottom layer!' }
     this.starting = { ru: 'Запуск модуля python...', en: 'Starting python module...' }
     this.modePanel = { ru: 'Тип выравнивания', en: 'Alignment mode' }

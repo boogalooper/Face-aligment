@@ -32,7 +32,6 @@ pose_detector_lock = threading.Lock()
 
 # ================= FACE =================
 
-
 def get_detector():
     global detector
 
@@ -71,7 +70,6 @@ def get_detector():
             print(error_msg)
             send_data_to_jsx({"type": "error", "message": error_msg})
             sys.exit(1)
-
 
 def detect_face_landmarks(image_path):
     try:
@@ -256,7 +254,6 @@ def start_server():
 
 if __name__ == "__main__":
     print("[INFO] Скрипт запущен")
-    send_data_to_jsx({"type": "answer", "message": "init"})
     get_detector()
     get_pose_detector()
     start_server()

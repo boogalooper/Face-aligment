@@ -1,21 +1,22 @@
+#target photoshop
 /*
 // BEGIN__HARVEST_EXCEPTION_ZSTRING
 <javascriptresource>
-<name>Face alignment/name>
-<category>actions</category>
+<name>Face alignment</name>
+<category>alignment</category>
 <enableinfo>true</enableinfo>
 <eventid>7a4144e4-943e-4b5f-8d40-06dfc90b682b</eventid>
 <terminology><![CDATA[<< /Version 1
                        /Events <<
                        /7a4144e4-943e-4b5f-8d40-06dfc90b682b [(Face alignment) <<
+                       /inAction [(action settings) /boolean]
                        >>]
                         >>
                      >> ]]></terminology>
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-#target photoshop
-const ver = 0.13,
+const ver = 0.131,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
@@ -32,11 +33,13 @@ var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new Fil
     doc = new AM('document'),
     lr = new AM('layer'),
     str = new Locale(),
-    cfg = new Config();
+    cfg = new Config(),
+    inAction = true,
+    isDirty = false;
 isCancelled = false;
 $.localize = true
 //$.locale = 'ru'
-isCancelled ? 'cancel' : undefined
+isCancelled ? 'cancel' : undefined;
 if (!app.playbackParameters.count) {
     cfg.getScriptSettings()
     var w = dialog(); var result = w.show()
@@ -58,7 +61,7 @@ else {
         main();
     }
 }
-isCancelled ? 'cancel' : undefined
+isCancelled ? 'cancel' : undefined;
 function main() {
     try {
         var curentState = doc.getSelectionMode(),
@@ -77,7 +80,8 @@ function dialog(mode) {
     var dialog = new Window("dialog{orientation:'column',alignChildren:['fill','top'],spacing:10,margins:16}"),
         pnMode = dialog.add("panel{orientation:'column',alignChildren:['fill','top'],spacing:10,margins:10}"),
         dlMode = pnMode.add("dropdownlist"),
-        stMode = pnMode.add("statictext{properties:{multiline:true},preferredSize:[250,50]}"),
+        stMode = pnMode.add("statictext{properties:{multiline:true},preferredSize:[250,70]}"),
+        chAuto = pnMode.add("checkbox"),
         pnOptions = dialog.add("panel{orientation:'column',alignChildren:['left','top'],spacing:10,margins:[10,20,10,10]}"),
         chMove = pnOptions.add("checkbox"),
         chResize = pnOptions.add("checkbox"),
@@ -109,7 +113,10 @@ function dialog(mode) {
     chDialogMode.text = str.dialogMode;
     chTile.text = str.tileResize;
     stKTitle.text = str.rotationRatio;
+    chAuto.text = str.auto;
     ok.text = str.save
+    chAuto.value = cfg.auto
+    dlMode.enabled = !cfg.auto
     chMove.value = cfg.move
     chResize.value = cfg.resize
     chRotate.value = slK.enabled = stKValue.visible = cfg.rotate
@@ -132,6 +139,10 @@ function dialog(mode) {
     slTile.onChanging = function () {
         this.value = Math.round(this.value)
         stTileValue.text = cfg.detectSize = this.value * 512
+    }
+    chAuto.onClick = function () {
+        cfg.auto = this.value
+        dlMode.enabled = !this.value
     }
     slTile.onChange = slTile.onChanging;
     chDialogMode.onClick = function () { cfg.dialogMode = this.value }
@@ -190,13 +201,26 @@ function getKeyPoints(lrs) {
             k = cfg.detectSize / (docW > docH ? docW : docH);
         k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
-        var mesh = fd.sendPayload(cfg.pose ? 'pose' : 'face', f.fsName.replace(/\\/g, '\\\\'));
+        if (cfg.auto && !isDirty) {
+            var mesh = fd.sendPayload('pose', f.fsName.replace(/\\/g, '\\\\'));
+            if (mesh) {
+                cfg.pose = (mesh[23][2] > 0.5 && mesh[24][2] > 0.5) && (mesh[23][1] <= docH && mesh[24][2] <= docH)
+                cfg.legs = (mesh[27][2] > 0.5 && mesh[28][2] > 0.5) && (mesh[27][2] <= docH && mesh[28][2] <= docH)
+            } else {
+                cfg.pose = false
+                cfg.legs = false
+            }
+            isDirty = true
+        }
+        if (!(mesh && cfg.pose)) {
+            var mesh = fd.sendPayload(cfg.pose ? 'pose' : 'face', f.fsName.replace(/\\/g, '\\\\'));
+        }
         if (mesh) {
             calcDimensions(o, mesh)
         } else {
             if (!cfg.pose) {
                 var mesh = fd.sendPayload('pose', f.fsName.replace(/\\/g, '\\\\'));
-                if (!mesh) {
+                if (mesh) {
                     var faceRect = {};
                     faceRect.left = mesh[12][0]
                     faceRect.right = mesh[11][0]
@@ -465,7 +489,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
             apiFile.execute();
             var result = sendMessage({}, INIT_DELAY, false, true);
             if (!result) throw new Error(str.errConnection) else {
-                if (result.message = 'init') {
+                if (result.message == 'init') {
                     var result = sendMessage({}, INSTALL_DELAY, false, true, str.starting);
                     if (!result) throw new Error(str.errStarting)
                     if (result.type == 'error') throw new Error(result.message)
@@ -570,32 +594,34 @@ function Locale() {
     this.optionsPanel = { ru: 'Параметры выравнивания слоёв:', en: 'Layer alignment options:' }
     this.additionalPanel = { ru: 'Дополнительно', en: 'Additional' }
     this.okButton = { ru: 'Выровнять слои', en: 'Align layers' }
-    this.move = { ru: 'перемещение', en: 'move' }
-    this.resize = { ru: 'изменение размера', en: 'resize' }
-    this.rotate = { ru: 'поворот', en: 'rotate' }
+    this.auto = { ru: 'автоматическое определение типа выравнивания', en: 'automatic detection of alignment mode' }
+    this.move = { ru: 'совмещение центральных точек лиц', en: 'fit central points of faces' }
+    this.resize = { ru: 'подгонка по размеру', en: 'size matching' }
+    this.rotate = { ru: 'коррекция наклона линии глаз', en: 'aligning the eyes horizontally' }
     this.dialogMode = { ru: 'интерактивная трансформация', en: 'interactive transform' }
-    this.tileResize = { ru: 'ресайз для детектора, px', en: 'resize for detector, px' }
+    this.tileResize = { ru: 'ресайз слоя для детектора, px', en: 'resize layer for detector, px' }
     this.rotationRatio = { ru: 'коэффициент поворота', en: 'rotation ratio' }
     this.modeFace = { ru: 'Погрудный портрет', en: 'Head and shoulders' }
     this.modeHalf = { ru: 'Поколенный портрет', en: 'Half body portrait' }
     this.modeFull = { ru: 'Портрет в полный рост', en: 'Full body portrait' }
     var modeFaceDesc = {
-        ru: 'Выравнивание по лицу. Размер рассчитывается по расстоянию между глазами и пропорциям лица. Точно центрирует и при необходимости выравнивает наклон головы.',
-        en: 'Face-based alignment. Scale is calculated from the distance between the eyes and facial proportions. Precisely centers and optionally corrects head tilt.'
+        ru: 'Выравнивание по лицу. Размер рассчитывается по расстоянию между глазами и пропорциям лица. Максимальная точность для крупных портретов',
+        en: 'Face-based alignment. Scale is calculated from the distance between the eyes and facial proportions. Maximum precision for large portraits'
     },
         modeHalfDesc = {
-            ru: 'Выравнивание по фигуре до уровня бёдер. Масштаб определяется по расстоянию от головы до линии бёдер. Подходит для средних планов с видимой позой.',
-            en: 'Body alignment up to hip level. Scale is calculated from head to hip line distance. Suitable for medium shots with visible pose.'
+            ru: 'Выравнивание по фигуре до уровня бёдер. Масштаб определяется по расстоянию от центра лица до линии бёдер. Подходит для средних планов, точность выравнивания лиц низкая',
+            en: 'Body alignment up to hip level. Scale is calculated from midpoint of face to hip line distance. Suitable for medium shots, face alignment accuracy is low'
         },
         modeFullDesc = {
-            ru: 'Выравнивание по всей фигуре. Размер рассчитывается от головы до нижней точки тела. Оптимально для портретов в полный рост с сохранением пропорций.',
-            en: 'Full body alignment. Scale is calculated from head to the lowest body point. Ideal for full-height portraits while preserving proportions.'
+            ru: 'Выравнивание по всей фигуре. Размер рассчитывается от головы до нижней точки тела. Оптимально для портретов в полный рост, точность выравнивания лиц низкая',
+            en: 'Full body alignment. Scale is calculated from head to the lowest body point. Ideal for full-height portraits, face alignment accuracy is low'
         };
     this.desc = [modeFaceDesc, modeHalfDesc, modeFullDesc]
     this.save = { ru: 'Сохранить настройки', en: 'Save settings' }
 }
 function Config() {
     settingsObj = this
+    this.auto = false
     this.move = true
     this.resize = true
     this.rotate = false

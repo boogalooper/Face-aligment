@@ -1,4 +1,4 @@
-#target photoshop
+﻿#target photoshop
 /*
 // BEGIN__HARVEST_EXCEPTION_ZSTRING
 <javascriptresource>
@@ -63,7 +63,7 @@ else {
 }
 isCancelled ? 'cancel' : undefined;
 function main() {
-    try {
+  //  try {
         var curentState = doc.getSelectionMode(),
             targetLayers = getSelectedLayers();
         if (targetLayers.length > 1 && fd.init()) {
@@ -73,7 +73,7 @@ function main() {
                 app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || cfg.dialogMode ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")'))
             else throw new Error(str.errBaseLayer)
         } else { throw new Error(str.errLr) }
-    } catch (e) { alert(e, str.err) }
+ //   } catch (e) { alert(e, str.err) }
     doc.setSelectionMode(curentState);
 }
 function dialog(mode) {

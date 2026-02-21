@@ -1,4 +1,4 @@
-#target photoshop
+﻿#target photoshop
 /*
 // BEGIN__HARVEST_EXCEPTION_ZSTRING
 <javascriptresource>

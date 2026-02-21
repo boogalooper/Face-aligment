@@ -198,7 +198,7 @@ function getKeyPoints(lrs) {
             docW = doc.getProperty('width') * docRes / 72,
             docH = doc.getProperty('height') * docRes / 72,
             f = new File(Folder.temp + '/FD.jpg'),
-            k = cfg.detectSize / (docW > docH ? docW : docH);
+            k = cfg.detectSize / (docW < docH ? docW : docH);
         k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
         if (cfg.auto && !isDirty) {
@@ -232,7 +232,7 @@ function getKeyPoints(lrs) {
                     faceRect.top -= faceRect.top * 0.2
                     doc.makeSelection(faceRect, false)
                 } else {
-                    doc.selectSubject();
+                    try { doc.selectSubject(); } catch (e) { }
                 }
                 if (doc.getProperty('selection')) {
                     var relativeBounds = doc.descToObject(doc.getProperty('selection').value);
@@ -276,7 +276,7 @@ function getKeyPoints(lrs) {
             this.widthLeft = Math.sqrt(Math.pow(points.faceLeft[0] - points.left[0], 2) + Math.pow(points.faceLeft[1] - points.left[1], 2))
             this.widthRight = Math.sqrt(Math.pow(points.faceRight[0] - points.right[0], 2) + Math.pow(points.faceRight[1] - points.right[1], 2))
         }
-        return
+        return this
     }
 }
 function transformLayers(targetLayers, baseLayer) {

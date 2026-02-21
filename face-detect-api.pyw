@@ -256,7 +256,6 @@ def start_server():
 
 if __name__ == "__main__":
     print("[INFO] Скрипт запущен")
-
     send_data_to_jsx({"type": "answer", "message": "init"})
     get_detector()
     get_pose_detector()

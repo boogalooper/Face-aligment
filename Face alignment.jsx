@@ -594,7 +594,7 @@ function Locale() {
     this.optionsPanel = { ru: 'Параметры выравнивания слоёв:', en: 'Layer alignment options:' }
     this.additionalPanel = { ru: 'Дополнительно', en: 'Additional' }
     this.okButton = { ru: 'Выровнять слои', en: 'Align layers' }
-    this.auto = { ru: 'автоматическое определение типа выравнивания', en: 'automatic detection of alignment mode' }
+    this.auto = { ru: 'автоматическое выравнивание', en: 'automatic alignment mode' }
     this.move = { ru: 'совмещение центральных точек лиц', en: 'fit central points of faces' }
     this.resize = { ru: 'подгонка по размеру', en: 'size matching' }
     this.rotate = { ru: 'коррекция наклона линии глаз', en: 'aligning the eyes horizontally' }

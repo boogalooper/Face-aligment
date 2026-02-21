@@ -69,7 +69,7 @@ function main() {
         if (targetLayers.length > 1 && fd.init()) {
             if (curentState == 'imageProcessingModeCloud') doc.setSelectionMode('imageProcessingModeDevice');
             targetLayers.length <= 2 ? getKeyPoints(targetLayers) : app.doForcedProgress("Detect key points", "getKeyPoints(targetLayers)");
-            if (targetLayers[0] instanceof Object)
+            if (targetLayers[0] instanceof Object && targetLayers[0].measurement && targetLayers[0].measurement.middle)
                 app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || cfg.dialogMode ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")'))
             else throw new Error(str.errBaseLayer)
         } else { throw new Error(str.errLr) }
@@ -149,9 +149,9 @@ function dialog(mode) {
     chTile.onClick = function () {
         cfg.tile = slTile.enabled = stTileValue.visible = this.value
     }
-    chMove.onClick = function () { cfg.move = this.value }
-    chResize.onClick = function () { cfg.resize = this.value }
-    chRotate.onClick = function () { cfg.rotate = slK.enabled = stKValue.visible = this.value }
+    chMove.onClick = function () { cfg.move = this.value; ok.enabled = chMove.value || chResize.value || chRotate.value }
+    chResize.onClick = function () { cfg.resize = this.value; ok.enabled = chMove.value || chResize.value || chRotate.value }
+    chRotate.onClick = function () { cfg.rotate = slK.enabled = stKValue.visible = this.value; ok.enabled = chMove.value || chResize.value || chRotate.value }
     dialog.onShow = function () {
         if (!cfg.pose && !cfg.legs) { dlMode.selection = 0 } else if (cfg.pose && !cfg.legs) { dlMode.selection = 1 } else { dlMode.selection = 2 }
         chMove.value = cfg.move
@@ -246,21 +246,23 @@ function getKeyPoints(lrs) {
         doc.close();
         f.remove();
         function calcDimensions(o, mesh, dX, dY) {
-            dX = dX ? dX : 0;
-            dY = dY ? dY : 0;
-            o['left'] = [(mesh[cfg.pose ? 6 : 33][0] + dX) * 1 / k, (mesh[cfg.pose ? 6 : 33][1] + dY) * 1 / k]
-            o['right'] = [(mesh[cfg.pose ? 3 : 263][0] + dX) * 1 / k, (mesh[cfg.pose ? 3 : 263][1] + dY) * 1 / k]
-            if (cfg.pose) {
-                o['bodyLeft'] = [(mesh[cfg.legs ? 27 : 23][0] + dX) * 1 / k, (mesh[cfg.legs ? 27 : 23][1] + dY) * 1 / k]
-                o['bodyRight'] = [(mesh[cfg.legs ? 28 : 24][0] + dX) * 1 / k, (mesh[cfg.legs ? 28 : 24][1] + dY) * 1 / k]
-                o['bottom'] = getMidpoint(o['bodyRight'], o['bodyLeft'])
-                o['middle'] = getMidpoint(o['left'], o['right'])
-            } else {
-                o['faceLeft'] = [(mesh[127][0] + dX) * 1 / k, (mesh[127][1] + dY) * 1 / k]
-                o['faceRight'] = [(mesh[356][0] + dX) * 1 / k, (mesh[356][1] + dY) * 1 / k]
-                o['bottom'] = [(mesh[152][0] + dX) * 1 / k, (mesh[152][1] + dY) * 1 / k]
-                o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
-            }
+            try {
+                dX = dX ? dX : 0;
+                dY = dY ? dY : 0;
+                o['left'] = [(mesh[cfg.pose ? 5 : 33][0] + dX) * 1 / k, (mesh[cfg.pose ? 5 : 33][1] + dY) * 1 / k]
+                o['right'] = [(mesh[cfg.pose ? 2 : 263][0] + dX) * 1 / k, (mesh[cfg.pose ? 2 : 263][1] + dY) * 1 / k]
+                if (cfg.pose) {
+                    o['bodyLeft'] = [(mesh[cfg.legs ? 27 : 23][0] + dX) * 1 / k, (mesh[cfg.legs ? 27 : 23][1] + dY) * 1 / k]
+                    o['bodyRight'] = [(mesh[cfg.legs ? 28 : 24][0] + dX) * 1 / k, (mesh[cfg.legs ? 28 : 24][1] + dY) * 1 / k]
+                    o['bottom'] = getMidpoint(o['bodyRight'], o['bodyLeft'])
+                    o['middle'] = getMidpoint(o['left'], o['right'])
+                } else {
+                    o['faceLeft'] = [(mesh[127][0] + dX) * 1 / k, (mesh[127][1] + dY) * 1 / k]
+                    o['faceRight'] = [(mesh[356][0] + dX) * 1 / k, (mesh[356][1] + dY) * 1 / k]
+                    o['bottom'] = [(mesh[152][0] + dX) * 1 / k, (mesh[152][1] + dY) * 1 / k]
+                    o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
+                }
+            } catch (e) { }
         }
         function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
     }
@@ -285,7 +287,7 @@ function transformLayers(targetLayers, baseLayer) {
     lr.selectNoLayers();
     for (var i = 0; i < len; i++) {
         app.changeProgressText("Align layer: " + lr.getProperty("name", targetLayers[i].id))
-        if (targetLayers[i] instanceof Object) {
+        if (targetLayers[i] instanceof Object && targetLayers[i].measurement && targetLayers[i].measurement.middle) {
             tmp.push(targetLayers[i].id)
             doc.selectLayers([targetLayers[i].id])
             app.updateProgress(i + 1, len)

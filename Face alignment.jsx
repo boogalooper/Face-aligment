@@ -16,7 +16,7 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.131,
+const ver = 0.132,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
@@ -25,7 +25,7 @@ const ver = 0.131,
     INSTALL_DELAY = 15000,
     DETECTION_DELAY = 8000,
     PROGRESS_DELAY = 2500,
-    PING_DELAY = 100,
+    PING_DELAY = 250,
     UUID = '7a4144e4-943e-4b5f-8d40-06dfc90b682b';
 var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new File($.fileName)).path + '/' + API_FILE)),
     s2t = stringIDToTypeID,
@@ -204,8 +204,8 @@ function getKeyPoints(lrs) {
         if (cfg.auto && !isDirty) {
             var mesh = fd.sendPayload('pose', f.fsName.replace(/\\/g, '\\\\'));
             if (mesh) {
-                cfg.pose = (mesh[23][2] > 0.5 && mesh[24][2] > 0.5) && (mesh[23][1] <= docH && mesh[24][2] <= docH)
-                cfg.legs = (mesh[27][2] > 0.5 && mesh[28][2] > 0.5) && (mesh[27][2] <= docH && mesh[28][2] <= docH)
+                cfg.pose = mesh[23] && mesh[24] ? (mesh[23][2] > 0.5 && mesh[24][2] > 0.5) && (mesh[23][1] <= docH && mesh[24][2] <= docH) : false;
+                cfg.legs = mesh[27] && mesh[28] ? (mesh[27][2] > 0.5 && mesh[28][2] > 0.5) && (mesh[27][2] <= docH && mesh[28][2] <= docH) : false;
             } else {
                 cfg.pose = false
                 cfg.legs = false
@@ -221,16 +221,20 @@ function getKeyPoints(lrs) {
             if (!cfg.pose) {
                 var mesh = fd.sendPayload('pose', f.fsName.replace(/\\/g, '\\\\'));
                 if (mesh) {
-                    var faceRect = {};
-                    faceRect.left = mesh[12][0]
-                    faceRect.right = mesh[11][0]
-                    faceRect.bottom = mesh[11][1] > mesh[12][1] ? mesh[11][1] : mesh[12][1]
-                    faceRect.top = mesh[0][1] - (faceRect.bottom - mesh[0][1])
-                    faceRect.left -= faceRect.left * 0.2
-                    faceRect.right += faceRect.right * 0.2
-                    faceRect.bottom += faceRect.bottom * 0.2
-                    faceRect.top -= faceRect.top * 0.2
-                    doc.makeSelection(faceRect, false)
+                    var fp = findPairPoints(mesh, [[5, 2], [6, 3], [4, 1], [8, 7], [0, 0], [10, 9]]),
+                        bp = findPairPoints(mesh, [[12, 11], [24, 23], [14, 13]]);
+                    if (fp && bp && mesh[0]) {
+                        var faceRect = {};
+                        faceRect.left = mesh[fp[0]][0]
+                        faceRect.right = mesh[fp[1]][0]
+                        faceRect.bottom = mesh[bp[0]][1] > mesh[bp[1]][1] ? mesh[bp[0]][1] : mesh[bp[1]][1]
+                        faceRect.top = mesh[0][1] - (faceRect.bottom - mesh[0][1])
+                        faceRect.left -= faceRect.left * 0.2
+                        faceRect.right += faceRect.right * 0.2
+                        faceRect.bottom += faceRect.bottom * 0.2
+                        faceRect.top -= faceRect.top * 0.2
+                        doc.makeSelection(faceRect, false)
+                    }
                 } else {
                     try { doc.selectSubject(); } catch (e) { }
                 }
@@ -249,11 +253,17 @@ function getKeyPoints(lrs) {
             try {
                 dX = dX ? dX : 0;
                 dY = dY ? dY : 0;
-                o['left'] = [(mesh[cfg.pose ? 5 : 33][0] + dX) * 1 / k, (mesh[cfg.pose ? 5 : 33][1] + dY) * 1 / k]
-                o['right'] = [(mesh[cfg.pose ? 2 : 263][0] + dX) * 1 / k, (mesh[cfg.pose ? 2 : 263][1] + dY) * 1 / k]
+                var fp = null, bp = null;
                 if (cfg.pose) {
-                    o['bodyLeft'] = [(mesh[cfg.legs ? 27 : 23][0] + dX) * 1 / k, (mesh[cfg.legs ? 27 : 23][1] + dY) * 1 / k]
-                    o['bodyRight'] = [(mesh[cfg.legs ? 28 : 24][0] + dX) * 1 / k, (mesh[cfg.legs ? 28 : 24][1] + dY) * 1 / k]
+                    fp = findPairPoints(mesh, [[5, 2], [6, 3], [4, 1], [8, 7], [0, 0], [10, 9]])
+                    bp = cfg.legs ? findPairPoints(mesh, [[28, 27], [26, 25], [32, 31], [30, 29]]) : findPairPoints(mesh, [[24, 23], [26, 25]]);
+                    if (!fp || !bp) throw new Error()
+                }
+                o['left'] = [(mesh[cfg.pose ? fp[0] : 33][0] + dX) * 1 / k, (mesh[cfg.pose ? fp[0] : 33][1] + dY) * 1 / k]
+                o['right'] = [(mesh[cfg.pose ? fp[1] : 263][0] + dX) * 1 / k, (mesh[cfg.pose ? fp[1] : 263][1] + dY) * 1 / k]
+                if (cfg.pose) {
+                    o['bodyLeft'] = [(mesh[bp[0]][0] + dX) * 1 / k, (mesh[bp[0]][1] + dY) * 1 / k]
+                    o['bodyRight'] = [(mesh[bp[1]][0] + dX) * 1 / k, (mesh[bp[1]][1] + dY) * 1 / k]
                     o['bottom'] = getMidpoint(o['bodyRight'], o['bodyLeft'])
                     o['middle'] = getMidpoint(o['left'], o['right'])
                 } else {
@@ -263,6 +273,14 @@ function getKeyPoints(lrs) {
                     o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
                 }
             } catch (e) { }
+        }
+
+        function findPairPoints(mesh, pairs) {
+            for (var i = 0; i < pairs.length; i++) {
+                if (mesh[pairs[i][0]] && mesh[pairs[i][1]]) return pairs[i]
+            }
+            return null
+
         }
         function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
     }
@@ -489,14 +507,9 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         if (!result) {
             if (!apiFile.exists) throw new Error(str.errModule)
             apiFile.execute();
-            var result = sendMessage({}, INIT_DELAY, false, true);
-            if (!result) throw new Error(str.errConnection) else {
-                if (result.message == 'init') {
-                    var result = sendMessage({}, INSTALL_DELAY, false, true, str.starting);
-                    if (!result) throw new Error(str.errStarting)
-                    if (result.type == 'error') throw new Error(result.message)
-                }
-            }
+            var result = sendMessage({}, INIT_DELAY, false, true, str.starting);
+            if (!result) throw new Error(str.errConnection)
+            if (result.type == 'error') throw new Error(result.message)
         }
         return true
     }
@@ -589,7 +602,6 @@ function Locale() {
     this.errLr = { ru: '2 и более слоя должны быть выбраны: нижний слой является образцом размера лица. Слои должны быть незаблокированными!', en: 'Two or more layers must be selected: the bottom layer is the face size sample. The layers must be unlocked!' }
     this.errModule = { ru: 'Модуль ' + API_FILE + ' не найден! Убедитесь, что он находится в той же папке что и скрипт!', en: 'Module ' + API_FILE + ' not found! Make sure it in the same folder as the script!' }
     this.errConnection = { ru: 'Невозможно установить соединение c ' + API_FILE, en: 'Impossible to establish a connection with ' + API_FILE }
-    this.errStarting = { ru: 'Превышено время ожидания ответа модуля python!', en: 'The python module has timed out initializing!' }
     this.errBaseLayer = { ru: 'Ключевые точки не найдены на нижнем слое!', en: 'Key points not found on bottom layer!' }
     this.starting = { ru: 'Запуск модуля python...', en: 'Starting python module...' }
     this.modePanel = { ru: 'Тип выравнивания', en: 'Alignment mode' }

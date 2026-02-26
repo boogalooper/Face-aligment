@@ -16,16 +16,15 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.132,
+const ver = 0.135,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6310,
     API_PORT_LISTEN = 6311,
     API_FILE = 'face-detect-api.pyw',
-    INIT_DELAY = 8000,
-    INSTALL_DELAY = 15000,
+    INIT_DELAY = 15000,
     DETECTION_DELAY = 8000,
     PROGRESS_DELAY = 2500,
-    PING_DELAY = 250,
+    PING_DELAY = 100,
     UUID = '7a4144e4-943e-4b5f-8d40-06dfc90b682b';
 var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new File($.fileName)).path + '/' + API_FILE)),
     s2t = stringIDToTypeID,
@@ -45,7 +44,7 @@ if (!app.playbackParameters.count) {
     var w = dialog(); var result = w.show()
     if (result == 2) { isCancelled = true; } else {
         cfg.putScriptSettings(true)
-        main();
+        app.doProgress("", "main();");
     }
     cfg.putScriptSettings()
 }
@@ -58,22 +57,28 @@ else {
         }
     }
     if (app.playbackDisplayDialogs != DialogModes.ALL) {
-        main();
+        app.doProgress("", "main();");
     }
 }
 isCancelled ? 'cancel' : undefined;
 function main() {
     try {
         var curentState = doc.getSelectionMode(),
-            targetLayers = getSelectedLayers();
+            targetLayers = getSelectedLayers(),
+            docState = activeDocument.currentHistoryState,
+            docId = doc.getProperty('documentID');
         if (targetLayers.length > 1 && fd.init()) {
             if (curentState == 'imageProcessingModeCloud') doc.setSelectionMode('imageProcessingModeDevice');
-            targetLayers.length <= 2 ? getKeyPoints(targetLayers) : app.doForcedProgress("Detect key points", "getKeyPoints(targetLayers)");
+            targetLayers.length <= 2 ? getKeyPoints(targetLayers) : app.doProgressSegmentTask(targetLayers.length, 0, targetLayers.length * 2, "getKeyPoints(targetLayers)");
             if (targetLayers[0] instanceof Object && targetLayers[0].measurement && targetLayers[0].measurement.middle)
-                app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || cfg.dialogMode ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doForcedProgress("Align layers", "transformLayers(targetLayers, targetLayers.shift())")'))
+                app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || cfg.dialogMode ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doProgressSegmentTask(' + [targetLayers.length, targetLayers.length, targetLayers.length * 2].join(', ') + ', "transformLayers(targetLayers, targetLayers.shift())")'))
             else throw new Error(str.errBaseLayer)
         } else { throw new Error(str.errLr) }
-    } catch (e) { alert(e, str.err) }
+    } catch (e) {
+        if (doc.getProperty('documentID') != docId) doc.close(false);
+        activeDocument.currentHistoryState = docState;
+        if (!(e.number && e.number == 8007)) alert(e, str.err)
+    }
     doc.setSelectionMode(curentState);
 }
 function dialog(mode) {
@@ -178,8 +183,12 @@ function getSelectedLayers() {
 }
 function getKeyPoints(lrs) {
     app.activeDocument.suspendHistory("Detect key points", "function blankState () {return}")
+    var slice = 1 / (lrs.length);
     for (var i = 0; i < lrs.length; i++) {
-        app.changeProgressText("Detecting key points in layer: " + lr.getProperty("name", lrs[i]))
+        var text = "Detecting key points in layer: " + lr.getProperty("name", lrs[i]);
+        app.doProgressTask(slice, "workChunk('" + text + "', lrs, i)")
+    }
+    function workChunk(text, lrs, i) {
         lr.selectLayers([lrs[i]])
         var measurement = {};
         measurement['bounds'] = lr.descToObject(lr.getProperty("boundsNoEffects", lrs[i]).value);
@@ -187,6 +196,8 @@ function getKeyPoints(lrs) {
         if (i == 0 && measurement.middle == undefined) throw new Error(str.errBaseLayer)
         doc.selectPreviousHistoryState()
         if (measurement.middle) lrs[i] = new convertToAbsolute(lrs[i], measurement)
+        app.changeProgressText(text);
+        $.sleep(0);
     }
     function measureSubject(o) {
         if (lr.hasProperty('smartObject')) lr.rasterize();
@@ -301,10 +312,16 @@ function getKeyPoints(lrs) {
 }
 function transformLayers(targetLayers, baseLayer) {
     var len = targetLayers.length,
-        tmp = [];
+        tmp = [],
+        slice = 1 / (targetLayers.length - 1);
     lr.selectNoLayers();
     for (var i = 0; i < len; i++) {
-        app.changeProgressText("Align layer: " + lr.getProperty("name", targetLayers[i].id))
+        var text = "Align layer: " + lr.getProperty("name", targetLayers[i].id);
+        app.doProgressTask(slice, "workChunk('" + text + "', targetLayers, baseLayer, i)")
+    }
+    if (tmp.length) doc.selectLayers(tmp)
+
+    function workChunk(text, targetLayers, baseLayer, i) {
         if (targetLayers[i] instanceof Object && targetLayers[i].measurement && targetLayers[i].measurement.middle) {
             tmp.push(targetLayers[i].id)
             doc.selectLayers([targetLayers[i].id])
@@ -325,8 +342,9 @@ function transformLayers(targetLayers, baseLayer) {
             lr.transform(cfg.resize ? scale : 100, targetLayers[i].measurement.middle[0] + dX, targetLayers[i].measurement.middle[1] + dY, cfg.rotate ? -targetLayers[i].angle * cfg.angleRatio : 0, cfg.dialogMode ? DialogModes.ALL : DialogModes.NO)
             if (cfg.dialogMode) lr.setLayerOpacity(100)
         }
+        app.changeProgressText(text);
+        $.sleep(0);
     }
-    if (tmp.length) doc.selectLayers(tmp)
 }
 function debug(mesh) {
     for (a in mesh) {
@@ -505,7 +523,8 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     this.init = function () {
         var result = sendMessage({ type: 'handshake', message: '' }, PING_DELAY, true, true)
         if (!result) {
-            if (!apiFile.exists) throw new Error(str.errModule)
+            if (!apiFile.exists) { apiFile = new File(apiFile.fsName.substring(0, apiFile.fsName.length - 1)); }
+            if (!apiFile.exists) throw new Error(str.module)
             apiFile.execute();
             var result = sendMessage({}, INIT_DELAY, false, true, str.starting);
             if (!result) throw new Error(str.errConnection)

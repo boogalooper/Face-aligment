@@ -77,7 +77,7 @@ function main() {
     } catch (e) {
         if (doc.getProperty('documentID') != docId) doc.close(false);
         activeDocument.currentHistoryState = docState;
-        if (!(e.number && e.number == 8007)) alert(e, str.err)
+        if (!cfg.silentMode && !(e.number && e.number == 8007)) alert(e, str.err)
     }
     doc.setSelectionMode(curentState);
 }
@@ -103,12 +103,14 @@ function dialog(mode) {
         chTile = grTileCaption.add("checkbox{preferredSize:[200,-1]}"),
         stTileValue = grTileCaption.add("statictext{preferredSize:[50,-1],justify:'right'}"),
         slTile = grTile.add("slider{minvalue:1,maxvalue:8,preferredSize:[250,-1]}"),
-        grOk = dialog.add("group{orientation:'row',alignChildren:['center','center'],spacing:10,margins:0}"),
+        chSilent = dialog.add('checkbox')
+    grOk = dialog.add("group{orientation:'row',alignChildren:['center','center'],spacing:10,margins:0}"),
         ok = grOk.add('button', undefined, undefined, { name: 'ok' });
     dialog.text = "Face alignment " + ver;
     pnMode.text = str.modePanel;
     pnOptions.text = str.optionsPanel;
     pnAdditional.text = str.additionalPanel;
+    chSilent.text = str.silentMode
     dlMode.add("item", str.modeFace);
     dlMode.add("item", str.modeHalf);
     dlMode.add("item", str.modeFull);
@@ -131,6 +133,7 @@ function dialog(mode) {
     slTile.value = cfg.detectSize / 512
     stTileValue.text = cfg.detectSize
     chDialogMode.value = cfg.dialogMode
+    chSilent.value = cfg.silentMode
     dlMode.onChange = function () {
         stMode.text = str.desc[this.selection.index]
         switch (this.selection.index) {
@@ -138,6 +141,9 @@ function dialog(mode) {
             case 1: cfg.pose = true; cfg.legs = false; break;
             case 2: cfg.pose = cfg.legs = true; break;
         }
+    }
+    chSilent.onClick = function () {
+        cfg.silentMode = this.value
     }
     slK.onChanging = function () { stKValue.text = cfg.angleRatio = Math.floor((this.value / 100) * 100) / 100 }
     slK.onChange = slK.onChanging;
@@ -285,13 +291,11 @@ function getKeyPoints(lrs) {
                 }
             } catch (e) { }
         }
-
         function findPairPoints(mesh, pairs) {
             for (var i = 0; i < pairs.length; i++) {
                 if (mesh[pairs[i][0]] && mesh[pairs[i][1]]) return pairs[i]
             }
             return null
-
         }
         function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
     }
@@ -313,14 +317,13 @@ function getKeyPoints(lrs) {
 function transformLayers(targetLayers, baseLayer) {
     var len = targetLayers.length,
         tmp = [],
-        slice = 1 / (targetLayers.length - 1);
+        slice = 1 / (targetLayers.length);
     lr.selectNoLayers();
     for (var i = 0; i < len; i++) {
         var text = "Align layer: " + lr.getProperty("name", targetLayers[i].id);
         app.doProgressTask(slice, "workChunk('" + text + "', targetLayers, baseLayer, i)")
     }
     if (tmp.length) doc.selectLayers(tmp)
-
     function workChunk(text, targetLayers, baseLayer, i) {
         if (targetLayers[i] instanceof Object && targetLayers[i].measurement && targetLayers[i].measurement.middle) {
             tmp.push(targetLayers[i].id)
@@ -539,14 +542,14 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         return null;
     }
     function sendMessage(o, delay, sendData, getData, title) {
-        var tcp = new Socket,
-            delay = delay ? delay : INIT_DELAY;
-        if (sendData) {
-            tcp.open(apiHost + ':' + portSend, 'UTF-8')
-            tcp.writeln(objectToJSON(o))
-            tcp.close()
-        }
+        delay = delay ? delay : INIT_DELAY;
+        var listener = null;
+        var t1 = 0, t2 = 0, t3 = 0;
         if (getData) {
+            listener = new Socket();
+            if (!listener.listen(portListen, 'UTF-8')) {
+                return null;
+            }
             if (title) {
                 var w = new Window('palette', title),
                     bar = w.add('progressbar', undefined, 0, PROGRESS_DELAY);
@@ -554,37 +557,43 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
                 bar.value = 0;
                 w.show();
             }
-            var tcp = new Socket,
-                t1 = (new Date).getTime(),
-                t2 = 0,
-                t3 = t1;
-            if (tcp.listen(portListen, 'UTF-8')) {
-                for (; ;) {
-                    t2 = (new Date).getTime();
-                    if (t2 - t1 > delay) {
-                        if (title) w.close();
-                        return null;
-                    }
-                    if (title && t2 - t3 > 100) {
-                        t3 = t2
-                        if (bar.value >= PROGRESS_DELAY) bar.value = 0;
-                        bar.value = bar.value + 100;
-                        w.update();
-                    }
-                    var answer = tcp.poll();
-                    if (answer != null) {
-                        var a = eval('(' + answer.readln() + ')');
-                        answer.close();
-                        if (title) {
-                            w.close()
-                        }
-                        return a;
-                    }
-                }
-            }
-            tcp.close()
+            t1 = (new Date).getTime();
+            t3 = t1;
         }
-        return null
+        if (sendData) {
+            var sender = new Socket();
+            if (sender.open(apiHost + ':' + portSend, 'UTF-8')) {
+                sender.writeln(objectToJSON(o));
+                sender.close();
+            } else {
+                if (listener) listener.close();
+                return null;
+            }
+        }
+        if (!getData) return true;
+        for (; ;) {
+            t2 = (new Date).getTime();
+            if (t2 - t1 > delay) {
+                if (listener) listener.close();
+                if (title) w.close();
+                return null;
+            }
+            if (title && t2 - t3 > 100) {
+                t3 = t2
+                if (bar.value >= PROGRESS_DELAY) bar.value = 0;
+                bar.value = bar.value + 100;
+                w.update();
+            }
+            var answer = listener.poll();
+            if (answer != null) {
+                try { var a = eval('(' + answer.readln() + ')'); } catch (e) { a = null; }
+                if (title) { w.close() }
+                answer.close();
+                if (listener) listener.close();
+                return a;
+            }
+            $.sleep(1);
+        }
     }
     function objectToJSON(obj) {
         if (obj === null) {
@@ -651,6 +660,7 @@ function Locale() {
         };
     this.desc = [modeFaceDesc, modeHalfDesc, modeFullDesc]
     this.save = { ru: 'Сохранить настройки', en: 'Save settings' }
+    this.silentMode = { ru: 'тихий режим (без сообщений об ошибках)', en: 'Silent mode (no error alerts)' }
 }
 function Config() {
     settingsObj = this
@@ -664,6 +674,7 @@ function Config() {
     this.pose = false
     this.legs = false
     this.tile = true
+    this.silentMode = false
     this.getScriptSettings = function (fromAction) {
         if (fromAction) var d = playbackParameters; else try { var d = getCustomOptions(UUID) } catch (e) { };
         if (d != undefined) descriptorToObject(settingsObj, d)

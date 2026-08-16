@@ -12,8 +12,8 @@ import mediapipe as mp
 
 
 API_HOST = "127.0.0.1"
-API_PORT_SEND = 6311
-API_PORT_LISTEN = 6310
+API_PORT_SEND = 6321
+API_PORT_LISTEN = 6320
 
 TIMEOUT = 5 * 60
 last_request_time = time.time()
@@ -29,6 +29,7 @@ pose_detector = None
 
 detector_lock = threading.Lock()
 pose_detector_lock = threading.Lock()
+request_lock = threading.Lock()
 
 
 # ================= FACE =================
@@ -229,14 +230,26 @@ def handle_client(client_socket, server):
                 send_data_to_jsx({"type": "answer", "message": "success"})
 
             elif msg_type == "face":
-                filepath = message.get("message")
-                points = detect_face_landmarks(filepath)
-                send_data_to_jsx({"type": "answer", "message": points})
+                if not request_lock.acquire(blocking=False):
+                    send_data_to_jsx({"type": "error", "message": "Detection is busy"})
+                    return
+                try:
+                    filepath = message.get("message")
+                    points = detect_face_landmarks(filepath)
+                    send_data_to_jsx({"type": "answer", "message": points})
+                finally:
+                    request_lock.release()
 
             elif msg_type == "pose":
-                filepath = message.get("message")
-                points = detect_pose(filepath)
-                send_data_to_jsx({"type": "answer", "message": points})
+                if not request_lock.acquire(blocking=False):
+                    send_data_to_jsx({"type": "error", "message": "Detection is busy"})
+                    return
+                try:
+                    filepath = message.get("message")
+                    points = detect_pose(filepath)
+                    send_data_to_jsx({"type": "answer", "message": points})
+                finally:
+                    request_lock.release()
 
             elif msg_type == "exit":
                 print("[EXIT] Завершение сервера")

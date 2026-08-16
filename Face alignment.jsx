@@ -16,17 +16,17 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.135,
+const ver = 0.136,
     API_HOST = '127.0.0.1',
-    API_PORT_SEND = 6310,
-    API_PORT_LISTEN = 6311,
-    API_FILE = 'face-detect-api.pyw',
+    API_PORT_SEND = 6320,
+    API_PORT_LISTEN = 6321,
+    API_FILE = 'face-detect-api',
     INIT_DELAY = 15000,
     DETECTION_DELAY = 8000,
     PROGRESS_DELAY = 2500,
     PING_DELAY = 100,
     UUID = '7a4144e4-943e-4b5f-8d40-06dfc90b682b';
-var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, new File((new File($.fileName)).path + '/' + API_FILE)),
+var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, API_FILE),
     s2t = stringIDToTypeID,
     apl = new AM('application'),
     doc = new AM('document'),
@@ -39,7 +39,7 @@ isCancelled = false;
 $.localize = true
 //$.locale = 'ru'
 isCancelled ? 'cancel' : undefined;
-if (!app.playbackParameters.count) {
+if (!app.playbackParameters.count || app.playbackParameters.count == 1) {
     cfg.getScriptSettings()
     var w = dialog(); var result = w.show()
     if (result == 2) { isCancelled = true; } else {
@@ -214,7 +214,7 @@ function getKeyPoints(lrs) {
         var docRes = doc.getProperty('resolution'),
             docW = doc.getProperty('width') * docRes / 72,
             docH = doc.getProperty('height') * docRes / 72,
-            f = new File(Folder.temp + '/FD.jpg'),
+            f = new File(Folder.temp + '/FD_' + doc.getProperty('documentID') + '_' + (new Date()).getTime() + '_' + Math.floor(Math.random() * 1000000) + '.jpg'),
             k = cfg.detectSize / (docW < docH ? docW : docH);
         k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
@@ -526,17 +526,35 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     this.init = function () {
         var result = sendMessage({ type: 'handshake', message: '' }, PING_DELAY, true, true)
         if (!result) {
-            if (!apiFile.exists) { apiFile = new File(apiFile.fsName.substring(0, apiFile.fsName.length - 1)); }
-            if (!apiFile.exists) throw new Error(str.module)
-            apiFile.execute();
+            var f = findPythonModule(apiFile);
+            if (!f.exists) throw new Error(str.module)
+            f.execute();
             var result = sendMessage({}, INIT_DELAY, false, true, str.starting);
             if (!result) throw new Error(str.errConnection)
             if (result.type == 'error') throw new Error(result.message)
         }
         return true
     }
+
+    function findPythonModule(apiFile) {
+        var scriptFolder = new File($.fileName).parent,
+            candidates = [
+                new File(scriptFolder.fsName + '/' + apiFile + '.py'),
+                new File(scriptFolder.fsName + '/' + apiFile + '.pyw'),
+                new File(scriptFolder.fsName + '/lib/' + apiFile + '.py'),
+                new File(scriptFolder.fsName + '/lib/' + apiFile + '.pyw')
+            ];
+        for (var i = 0; i < candidates.length; i++) {
+            if (candidates[i].exists) {
+                return candidates[i];
+            }
+        }
+        return null;
+    }
+
     this.sendPayload = function (type, payload) {
         var result = sendMessage({ type: type, message: payload }, DETECTION_DELAY, true, true)
+        if (!result) throw new Error(str.errDetectionTimeout)
         if (result.type == 'answer') return result['message']
         if (result.type == 'error') throw new Error(result.message)
         return null;
@@ -630,6 +648,7 @@ function Locale() {
     this.errLr = { ru: '2 и более слоя должны быть выбраны: нижний слой является образцом размера лица. Слои должны быть незаблокированными!', en: 'Two or more layers must be selected: the bottom layer is the face size sample. The layers must be unlocked!' }
     this.errModule = { ru: 'Модуль ' + API_FILE + ' не найден! Убедитесь, что он находится в той же папке что и скрипт!', en: 'Module ' + API_FILE + ' not found! Make sure it in the same folder as the script!' }
     this.errConnection = { ru: 'Невозможно установить соединение c ' + API_FILE, en: 'Impossible to establish a connection with ' + API_FILE }
+    this.errDetectionTimeout = { ru: 'Превышено время ожидания ответа детектора', en: 'Detector response timeout' }
     this.errBaseLayer = { ru: 'Ключевые точки не найдены на нижнем слое!', en: 'Key points not found on bottom layer!' }
     this.starting = { ru: 'Запуск модуля python...', en: 'Starting python module...' }
     this.modePanel = { ru: 'Тип выравнивания', en: 'Alignment mode' }

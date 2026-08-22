@@ -1,4 +1,4 @@
-﻿#target photoshop
+#target photoshop
 /*
 // BEGIN__HARVEST_EXCEPTION_ZSTRING
 <javascriptresource>
@@ -16,7 +16,7 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.136,
+const ver = 0.137,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6320,
     API_PORT_LISTEN = 6321,
@@ -91,6 +91,7 @@ function dialog(mode) {
         chMove = pnOptions.add("checkbox"),
         chResize = pnOptions.add("checkbox"),
         chRotate = pnOptions.add("checkbox"),
+        chReferenceTilt = pnOptions.add("checkbox"),
         grK = pnOptions.add("group{orientation:'column',alignChildren:['left','center'],spacing:0,margins:0}"),
         grKTitle = grK.add("group{orientation:'row',alignChildren:['left','center'],spacing:0,margins:0}"),
         stKTitle = grKTitle.add("statictext{preferredSize:[200,-1]}"),
@@ -117,6 +118,7 @@ function dialog(mode) {
     chMove.text = str.move;
     chResize.text = str.resize;
     chRotate.text = str.rotate;
+    chReferenceTilt.text = str.referenceTilt;
     chDialogMode.text = str.dialogMode;
     chTile.text = str.tileResize;
     stKTitle.text = str.rotationRatio;
@@ -127,6 +129,8 @@ function dialog(mode) {
     chMove.value = cfg.move
     chResize.value = cfg.resize
     chRotate.value = slK.enabled = stKValue.visible = cfg.rotate
+    chReferenceTilt.value = cfg.referenceTilt
+    chReferenceTilt.enabled = cfg.rotate
     slK.value = cfg.angleRatio * 100
     stKValue.text = cfg.angleRatio
     chTile.value = slTile.enabled = stTileValue.visible = cfg.tile
@@ -162,12 +166,15 @@ function dialog(mode) {
     }
     chMove.onClick = function () { cfg.move = this.value; ok.enabled = chMove.value || chResize.value || chRotate.value }
     chResize.onClick = function () { cfg.resize = this.value; ok.enabled = chMove.value || chResize.value || chRotate.value }
-    chRotate.onClick = function () { cfg.rotate = slK.enabled = stKValue.visible = this.value; ok.enabled = chMove.value || chResize.value || chRotate.value }
+    chReferenceTilt.onClick = function () { cfg.referenceTilt = this.value }
+    chRotate.onClick = function () { cfg.rotate = slK.enabled = stKValue.visible = chReferenceTilt.enabled = this.value; ok.enabled = chMove.value || chResize.value || chRotate.value }
     dialog.onShow = function () {
         if (!cfg.pose && !cfg.legs) { dlMode.selection = 0 } else if (cfg.pose && !cfg.legs) { dlMode.selection = 1 } else { dlMode.selection = 2 }
         chMove.value = cfg.move
         chResize.value = cfg.resize
         chRotate.value = cfg.rotate
+        chReferenceTilt.value = cfg.referenceTilt
+        chReferenceTilt.enabled = cfg.rotate
         ok.text = mode ? str.save : str.okButton
         ok.enabled = mode ? true : apl.getProperty('numberOfDocuments') && (getSelectedLayers()).length >= 2;
     }
@@ -219,10 +226,12 @@ function getKeyPoints(lrs) {
         k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
         if (cfg.auto && !isDirty) {
-            var mesh = fd.sendPayload('pose', f.fsName.replace(/\\/g, '\\\\'));
+            var mesh = fd.sendPayload('pose', f.fsName.replace(/\\/g, '\\\\')),
+                detectW = docW * k,
+                detectH = docH * k;
             if (mesh) {
-                cfg.pose = mesh[23] && mesh[24] ? (mesh[23][2] > 0.5 && mesh[24][2] > 0.5) && (mesh[23][1] <= docH && mesh[24][2] <= docH) : false;
-                cfg.legs = mesh[27] && mesh[28] ? (mesh[27][2] > 0.5 && mesh[28][2] > 0.5) && (mesh[27][2] <= docH && mesh[28][2] <= docH) : false;
+                cfg.pose = pointIsVisible(mesh[23], detectW, detectH) && pointIsVisible(mesh[24], detectW, detectH);
+                cfg.legs = cfg.pose && pointIsVisible(mesh[27], detectW, detectH) && pointIsVisible(mesh[28], detectW, detectH);
             } else {
                 cfg.pose = false
                 cfg.legs = false
@@ -241,18 +250,27 @@ function getKeyPoints(lrs) {
                     var fp = findPairPoints(mesh, [[5, 2], [6, 3], [4, 1], [8, 7], [0, 0], [10, 9]]),
                         bp = findPairPoints(mesh, [[12, 11], [24, 23], [14, 13]]);
                     if (fp && bp && mesh[0]) {
-                        var faceRect = {};
-                        faceRect.left = mesh[fp[0]][0]
-                        faceRect.right = mesh[fp[1]][0]
+                        var faceRect = {},
+                            detectW = docW * k,
+                            detectH = docH * k,
+                            x1 = mesh[fp[0]][0],
+                            x2 = mesh[fp[1]][0];
+                        faceRect.left = x1 < x2 ? x1 : x2
+                        faceRect.right = x1 > x2 ? x1 : x2
                         faceRect.bottom = mesh[bp[0]][1] > mesh[bp[1]][1] ? mesh[bp[0]][1] : mesh[bp[1]][1]
                         faceRect.top = mesh[0][1] - (faceRect.bottom - mesh[0][1])
-                        faceRect.left -= faceRect.left * 0.2
-                        faceRect.right += faceRect.right * 0.2
-                        faceRect.bottom += faceRect.bottom * 0.2
-                        faceRect.top -= faceRect.top * 0.2
-                        doc.makeSelection(faceRect, false)
+                        var faceW = faceRect.right - faceRect.left,
+                            faceH = faceRect.bottom - faceRect.top,
+                            padX = faceW * 0.2,
+                            padY = faceH * 0.2;
+                        faceRect.left = Math.max(0, faceRect.left - padX)
+                        faceRect.right = Math.min(detectW, faceRect.right + padX)
+                        faceRect.top = Math.max(0, faceRect.top - padY)
+                        faceRect.bottom = Math.min(detectH, faceRect.bottom + padY)
+                        if (faceRect.right > faceRect.left && faceRect.bottom > faceRect.top) doc.makeSelection(faceRect, false)
                     }
-                } else {
+                }
+                if (!doc.getProperty('selection')) {
                     try { doc.selectSubject(); } catch (e) { }
                 }
                 if (doc.getProperty('selection')) {
@@ -266,6 +284,9 @@ function getKeyPoints(lrs) {
         }
         doc.close();
         f.remove();
+        function pointIsVisible(p, width, height) {
+            return p && p[2] > 0.5 && p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height;
+        }
         function calcDimensions(o, mesh, dX, dY) {
             try {
                 dX = dX ? dX : 0;
@@ -324,6 +345,11 @@ function transformLayers(targetLayers, baseLayer) {
         app.doProgressTask(slice, "workChunk('" + text + "', targetLayers, baseLayer, i)")
     }
     if (tmp.length) doc.selectLayers(tmp)
+    function normalizeAngle(angle) {
+        while (angle > 180) angle -= 360;
+        while (angle < -180) angle += 360;
+        return angle;
+    }
     function workChunk(text, targetLayers, baseLayer, i) {
         if (targetLayers[i] instanceof Object && targetLayers[i].measurement && targetLayers[i].measurement.middle) {
             tmp.push(targetLayers[i].id)
@@ -342,7 +368,12 @@ function transformLayers(targetLayers, baseLayer) {
             }
             lr.move(dX, dY);
             if (cfg.dialogMode) lr.setLayerOpacity(60)
-            lr.transform(cfg.resize ? scale : 100, targetLayers[i].measurement.middle[0] + dX, targetLayers[i].measurement.middle[1] + dY, cfg.rotate ? -targetLayers[i].angle * cfg.angleRatio : 0, cfg.dialogMode ? DialogModes.ALL : DialogModes.NO)
+            var rotation = 0;
+            if (cfg.rotate) {
+                rotation = cfg.referenceTilt ? normalizeAngle(baseLayer.angle - targetLayers[i].angle) : -targetLayers[i].angle;
+                rotation *= cfg.angleRatio;
+            }
+            lr.transform(cfg.resize ? scale : 100, targetLayers[i].measurement.middle[0] + dX, targetLayers[i].measurement.middle[1] + dY, rotation, cfg.dialogMode ? DialogModes.ALL : DialogModes.NO)
             if (cfg.dialogMode) lr.setLayerOpacity(100)
         }
         app.changeProgressText(text);
@@ -527,7 +558,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         var result = sendMessage({ type: 'handshake', message: '' }, PING_DELAY, true, true)
         if (!result) {
             var f = findPythonModule(apiFile);
-            if (!f.exists) throw new Error(str.module)
+            if (!f || !f.exists) throw new Error(str.errModule)
             f.execute();
             var result = sendMessage({}, INIT_DELAY, false, true, str.starting);
             if (!result) throw new Error(str.errConnection)
@@ -659,6 +690,7 @@ function Locale() {
     this.move = { ru: 'совмещение центральных точек лиц', en: 'fit central points of faces' }
     this.resize = { ru: 'подгонка по размеру', en: 'size matching' }
     this.rotate = { ru: 'коррекция наклона линии глаз', en: 'aligning the eyes horizontally' }
+    this.referenceTilt = { ru: 'учитывать наклон головы образца', en: 'match reference head tilt' }
     this.dialogMode = { ru: 'интерактивная трансформация', en: 'interactive transform' }
     this.tileResize = { ru: 'ресайз слоя для детектора, px', en: 'resize layer for detector, px' }
     this.rotationRatio = { ru: 'коэффициент поворота', en: 'rotation ratio' }
@@ -687,6 +719,7 @@ function Config() {
     this.move = true
     this.resize = true
     this.rotate = false
+    this.referenceTilt = false
     this.angleRatio = 0.75
     this.detectSize = 1024
     this.dialogMode = false

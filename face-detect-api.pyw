@@ -19,10 +19,20 @@ TIMEOUT = 5 * 60
 last_request_time = time.time()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LIB_DIR = os.path.join(BASE_DIR, "lib")
 
-MODEL_PATH = os.path.join(LIB_DIR, "face_landmarker.task")
-POSE_MODEL_PATH = os.path.join(LIB_DIR, "pose_landmarker_heavy.task")
+def resolve_model_path(filename):
+    candidates = [
+        os.path.join(BASE_DIR, filename),
+        os.path.join(BASE_DIR, "lib", filename),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return candidates[-1]
+
+
+MODEL_PATH = resolve_model_path("face_landmarker.task")
+POSE_MODEL_PATH = resolve_model_path("pose_landmarker_heavy.task")
 
 detector = None
 pose_detector = None
@@ -197,7 +207,7 @@ def send_data_to_jsx(obj):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(10)
             s.connect((API_HOST, API_PORT_SEND))
-            s.send(json.dumps(obj).encode("utf-8"))
+            s.sendall(json.dumps(obj).encode("utf-8"))
     except Exception as e:
         print("[SEND ERROR]", e)
 

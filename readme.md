@@ -30,7 +30,7 @@
 1. Распакуйте архив и запустите [install_runtime.bat](./install_runtime.bat).
 2. Выберите **1 — Normal secure mode** и дождитесь сообщения **Installation complete**.
 
-Установщик сам загрузит Python, необходимые библиотеки и модели. Они хранятся отдельно от Photoshop в `%LOCALAPPDATA%\FaceAlignmentRuntime`.
+Установщик сам загрузит Python, необходимые библиотеки и модели. Они хранятся отдельно от Photoshop в `%LOCALAPPDATA%\JazzyScripts\FaceAlignmentRuntime`.
 
 ### Шаг 2. Копирование файлов в Photoshop
 Скопируйте содержимое папки **Photoshop-files** в папку `Presets\Scripts` вашей версии Photoshop, например:

@@ -654,7 +654,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     function runtimeFiles() {
         var local=$.getenv('LOCALAPPDATA');
         if(!local) throw new Error('LOCALAPPDATA is unavailable.');
-        var root=local+'/FaceAlignmentRuntime';
+        var root=local+'/JazzyScripts/FaceAlignmentRuntime';
         return {root:root,python:new File(root+'/venv/Scripts/pythonw.exe'),
             launcher:new File(root+'/launcher.vbs'),marker:new File(root+'/runtime_version.txt')};
     }

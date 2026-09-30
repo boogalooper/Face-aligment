@@ -1,4 +1,4 @@
-#target photoshop
+﻿#target photoshop
 /*
 // BEGIN__HARVEST_EXCEPTION_ZSTRING
 <javascriptresource>
@@ -16,7 +16,7 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.138,
+const ver = 0.141,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6330,
     API_PORT_LISTEN = 6331,
@@ -34,7 +34,8 @@ var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, API_FILE),
     str = new Locale(),
     cfg = new Config(),
     inAction = true,
-    isDirty = false;
+    isDirty = false,
+    pendingPreviews = [];
 isCancelled = false;
 $.localize = true
 //$.locale = 'ru'
@@ -78,8 +79,28 @@ function main() {
         if (doc.getProperty('documentID') != docId) doc.close(false);
         activeDocument.currentHistoryState = docState;
         if (!cfg.silentMode && !(e.number && e.number == 8007)) alert(e, str.err)
+    } finally {
+        cleanupPreviews();
     }
     doc.setSelectionMode(curentState);
+}
+function removePreview(path) {
+    for (var attempt = 0; attempt < 3; attempt++) {
+        var file = new File(path);
+        try { if (!file.exists || file.remove()) return true; } catch (e) { }
+        $.sleep(50);
+    }
+    return false;
+}
+function cleanupPreviews() {
+    for (var i = 0; i < pendingPreviews.length; i++) {
+        var path = pendingPreviews[i];
+        if (!removePreview(path)) {
+            try { fd.cleanup(path); } catch (e) { }
+            if (!removePreview(path)) $.writeln('Face alignment: deferred JPEG cleanup: ' + path);
+        }
+    }
+    pendingPreviews = [];
 }
 function dialog(mode) {
     var dialog = new Window("dialog{orientation:'column',alignChildren:['fill','top'],spacing:10,margins:16}"),
@@ -229,6 +250,8 @@ function getKeyPoints(lrs) {
             docH = doc.getProperty('height') * docRes / 72,
             f = new File(Folder.temp + '/FD_' + doc.getProperty('documentID') + '_' + (new Date()).getTime() + '_' + Math.floor(Math.random() * 1000000) + '.jpg'),
             k = cfg.detectSize / (docW < docH ? docW : docH);
+        pendingPreviews.push(f.fsName);
+        try {
         k < 1 ? doc.setScale(k) : k = 1;
         doc.saveACopy(f)
         if (cfg.auto && !isDirty) {
@@ -288,8 +311,14 @@ function getKeyPoints(lrs) {
                 }
             }
         }
-        doc.close();
-        f.remove();
+        } finally {
+            // Closing the preview must not prevent file cleanup on errors/cancel.
+            try { doc.close(); } finally {
+                if (!removePreview(f.fsName)) {
+                    try { fd.cleanup(f.fsName); } catch (cleanupError) { }
+                }
+            }
+        }
         function pointIsVisible(p, width, height) {
             return p && p[2] > 0.5 && p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height;
         }
@@ -486,7 +515,7 @@ function AM(target, order) {
         executeAction(s2t('placedLayerEditContents'), undefined, DialogModes.NO)
     }
     this.saveACopy = function (pth) {
-        (d1 = new AD).putInteger(s2t('extendedQuality'), 12);
+        (d1 = new AD).putInteger(s2t('extendedQuality'), 6);
         d1.putEnumerated(s2t('matteColor'), s2t('matteColor'), s2t('none'));
         (d = new AD).putObject(s2t('as'), s2t('JPEG'), d1);
         d.putPath(s2t('in'), pth);
@@ -541,7 +570,7 @@ function AM(target, order) {
         (d = new AD).putUnitDouble(s2t("width"), s2t("percentUnit"), width * 100);
         d.putBoolean(s2t("scaleStyles"), true);
         d.putBoolean(s2t("constrainProportions"), true);
-        d.putEnumerated(s2t("interpolation"), s2t("interpolationType"), s2t("bilinear"));
+        d.putEnumerated(s2t("interpolation"), s2t("interpolationType"), s2t("nearestNeighbor"));
         executeAction(s2t("imageSize"), d, DialogModes.NO);
     }
     this.transform = function (scale, cX, cY, angle, dialogMode) {
@@ -684,6 +713,9 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         for(var i=0;i<paths.length;i++) {var f=new File(paths[i]);if(f.exists)return f;}
         return null;
     }
+    this.cleanup=function(path) {
+        return sendMessage({type:'cleanup',message:path},1500);
+    };
     this.sendPayload=function(type,payload) {
         var result=sendMessage({type:type,message:payload,head_support:!!(cfg.headSupport && cfg.resize)},DETECTION_DELAY);
         if(!result) throw new Error(str.errDetectionTimeout);

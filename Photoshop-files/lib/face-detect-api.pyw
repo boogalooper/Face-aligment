@@ -7,6 +7,8 @@ import threading
 import cv2
 import numpy as np
 import math
+import tempfile
+import re
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -291,6 +293,44 @@ def measure_head(img, points):
 SERVER_ID = "face-alignment/0.138"
 
 
+pending_cleanup = set()
+cleanup_lock = threading.Lock()
+
+
+def queue_preview_cleanup(path):
+    # Accept only this script's generated filenames directly inside OS TEMP.
+    if not isinstance(path, str):
+        return False
+    path = os.path.abspath(path)
+    if (os.path.normcase(os.path.realpath(os.path.dirname(path))) !=
+            os.path.normcase(os.path.realpath(tempfile.gettempdir()))):
+        return False
+    if not re.fullmatch(r"FD_\d+_\d+_\d+\.jpg", os.path.basename(path), re.IGNORECASE):
+        return False
+    with cleanup_lock:
+        pending_cleanup.add(path)
+    flush_preview_cleanup()
+    return True
+
+
+def flush_preview_cleanup():
+    # A timed-out JSX may request deletion while analysis is still using the file.
+    if not request_lock.acquire(False):
+        return
+    try:
+        with cleanup_lock:
+            for path in list(pending_cleanup):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    continue  # Retry on the next idle tick.
+                pending_cleanup.discard(path)
+    finally:
+        request_lock.release()
+
+
 def receive_json(client):
     data = bytearray()
     while len(data) < 65536:
@@ -324,6 +364,8 @@ def handle_client(client_socket):
         kind = message.get("type")
         if kind == "handshake":
             reply("answer", SERVER_ID)
+        elif kind == "cleanup":
+            reply("answer", queue_preview_cleanup(message.get("message")))
         elif kind in ("face", "pose"):
             if not request_lock.acquire(False):
                 reply("error", "Detection is busy; wait for the previous request to finish.")
@@ -336,6 +378,7 @@ def handle_client(client_socket):
             finally:
                 last_request_time = time.monotonic()
                 request_lock.release()
+                flush_preview_cleanup()
         else:
             reply("error", "Unknown request")
     except Exception as exc:
@@ -360,6 +403,7 @@ def start_server():
                 client, _ = server.accept()
                 threading.Thread(target=handle_client,args=(client,),daemon=True).start()
             except socket.timeout:
+                flush_preview_cleanup()
                 if not request_lock.locked() and time.monotonic()-last_request_time > TIMEOUT:
                     break
 

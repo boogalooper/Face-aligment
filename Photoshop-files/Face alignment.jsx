@@ -16,7 +16,7 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.142,
+const ver = 0.143,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6330,
     API_PORT_LISTEN = 6331,
@@ -62,6 +62,12 @@ else {
     }
 }
 isCancelled ? 'cancel' : undefined;
+function throwCancelled() {
+    isCancelled = true;
+    var e = new Error("Operation cancelled");
+    e.number = 8007;
+    throw e;
+}
 function main() {
     try {
         var curentState = doc.getSelectionMode(),
@@ -70,7 +76,9 @@ function main() {
             docId = doc.getProperty('documentID');
         if (targetLayers.length > 1 && fd.init()) {
             if (curentState == 'imageProcessingModeCloud') doc.setSelectionMode('imageProcessingModeDevice');
-            targetLayers.length <= 2 ? getKeyPoints(targetLayers) : app.doProgressSegmentTask(targetLayers.length, 0, targetLayers.length * 2, "getKeyPoints(targetLayers)");
+            if (targetLayers.length <= 2) getKeyPoints(targetLayers);
+            else if (app.doProgressSegmentTask(targetLayers.length, 0, targetLayers.length * 2, "getKeyPoints(targetLayers)") === false) throwCancelled();
+            if (isCancelled) throwCancelled();
             if (targetLayers[0] instanceof Object && targetLayers[0].measurement && targetLayers[0].measurement.middle)
                 app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || cfg.dialogMode ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doProgressSegmentTask(' + [targetLayers.length, targetLayers.length, targetLayers.length * 2].join(', ') + ', "transformLayers(targetLayers, targetLayers.shift())")'))
             else throw new Error(str.errBaseLayer)
@@ -226,7 +234,7 @@ function getKeyPoints(lrs) {
     var slice = 1 / (lrs.length);
     for (var i = 0; i < lrs.length; i++) {
         var text = "Detecting key points in layer: " + lr.getProperty("name", lrs[i]);
-        app.doProgressTask(slice, "workChunk(text, lrs, i)")
+        if (app.doProgressTask(slice, "workChunk(text, lrs, i)") === false) throwCancelled();
     }
     function workChunk(text, lrs, i) {
         lr.selectLayers([lrs[i]])
@@ -249,7 +257,7 @@ function getKeyPoints(lrs) {
             docW = doc.getProperty('width') * docRes / 72,
             docH = doc.getProperty('height') * docRes / 72,
             f = new File(Folder.temp + '/FD_' + doc.getProperty('documentID') + '_' + (new Date()).getTime() + '_' + Math.floor(Math.random() * 1000000) + '.jpg'),
-            k = cfg.detectSize / (docW < docH ? docW : docH);
+            k = cfg.tile ? cfg.detectSize / (docW < docH ? docW : docH) : 1;
         pendingPreviews.push(f.fsName);
         try {
         k < 1 ? doc.setScale(k) : k = 1;
@@ -439,7 +447,7 @@ function transformLayers(targetLayers, baseLayer) {
     lr.selectNoLayers();
     for (var i = 0; i < len; i++) {
         var text = "Align layer: " + lr.getProperty("name", targetLayers[i].id);
-        app.doProgressTask(slice, "workChunk(text, targetLayers, baseLayer, i)")
+        if (app.doProgressTask(slice, "workChunk(text, targetLayers, baseLayer, i)") === false) throwCancelled();
     }
     if (tmp.length) doc.selectLayers(tmp)
     function normalizeAngle(angle) {
@@ -650,7 +658,7 @@ function AM(target, order) {
 }
 function faceApi(apiHost, portSend, portListen, apiFile) {
     var sequence=0, session=(new Date()).getTime()+'-'+Math.floor(Math.random()*1000000),
-        serverID='face-alignment/0.138';
+        serverID='face-alignment/0.143';
     function runtimeFiles() {
         var local=$.getenv('LOCALAPPDATA');
         if(!local) throw new Error('LOCALAPPDATA is unavailable.');
@@ -690,7 +698,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     this.init=function() {
         var result=sendMessage({type:'handshake',message:''},1000);
         if(isHandshake(result)) return true;
-        if(result) throw new Error('Port '+portSend+' is occupied by an incompatible server.');
+        if(result) throw new Error('An older Face alignment server is running. Wait 15 minutes without using the script, or stop its pythonw.exe process, then try again.');
         var f=findPythonModule(apiFile);
         if(!f) throw new Error(str.errModule);
         ensureRuntime();
@@ -720,29 +728,64 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         var result=sendMessage({type:type,message:payload,head_support:!!(cfg.headSupport && cfg.resize)},DETECTION_DELAY);
         if(!result) throw new Error(str.errDetectionTimeout);
         if(result.server_id!=serverID) throw new Error('Unexpected detection server.');
+        if(result.type=='cancelled') throw new Error(result.message);
         if(result.type=='error') throw new Error(result.message);
         return result.type=='answer'?result.message:null;
     };
+    function controlRequest(type,targetID,waitReply) {
+        var socket = new Socket();
+        try {
+            socket.timeout = waitReply ? 6 : 1;
+            if (!socket.open(apiHost+':'+portSend,'UTF-8')) return false;
+            socket.writeln(objectToJSON({type:type,target_id:targetID}));
+            if (!waitReply) return true;
+            var result = eval('('+socket.readln()+')');
+            return result && result.stopped === true;
+        } catch(e) { return false; }
+        finally { try {socket.close();} catch(e) {} }
+    }
     function sendMessage(o,delay) {
         o.request_id=session+'-'+(++sequence);
-        var listener=new Socket(),sender=new Socket();
+        var listener=new Socket(),sender=new Socket(),
+            detection=o.type=='face' || o.type=='pose', sent=false, received=false;
         if(!listener.listen(portListen,'UTF-8')) throw new Error('Response port '+portListen+' is busy.');
         try {
             sender.timeout=1;
             if(!sender.open(apiHost+':'+portSend,'UTF-8')) return null;
+            // Mark before writing: a partial/failed send may still reach the server.
+            sent=true;
             sender.writeln(objectToJSON(o));sender.close();
-            var start=(new Date()).getTime();
+            var start=(new Date()).getTime(), lastPulse=start, lastHeartbeat=start;
             while((new Date()).getTime()-start<delay) {
+                var now=(new Date()).getTime();
+                if(detection && now-lastPulse>=100) {
+                    lastPulse=now;
+                    if(app.updateProgress(0,1)===false) throwCancelled();
+                }
+                if(detection && now-lastHeartbeat>=1000) {
+                    lastHeartbeat=now;
+                    controlRequest('heartbeat',o.request_id,false);
+                }
                 var answer=listener.poll();
                 if(answer) {
                     var parsed=null;
                     try {answer.timeout=5; parsed=eval('('+answer.readln()+')');} catch(e) {} finally {answer.close();}
-                    if(parsed && parsed.request_id==o.request_id) return parsed;
+                    if(parsed && parsed.request_id==o.request_id) { received=true;return parsed; }
                 }
                 $.sleep(5);
             }
             return null;
-        } finally {try{sender.close();}catch(e){} listener.close();}
+        } catch(e) {
+            if(e.number==8007) isCancelled=true;
+            throw e;
+        } finally {
+            try{sender.close();}catch(e){}
+            listener.close();
+            if(detection && sent && !received) {
+                if(!controlRequest('cancel',o.request_id,true))
+                    $.writeln('Face alignment: cancellation not acknowledged; server heartbeat/deadline watchdog remains active.');
+            }
+        }
     }
     function objectToJSON(o) {
         function quote(s) {return '"'+String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\r/g,'\\r').replace(/\n/g,'\\n').replace(/\t/g,'\\t')+'"';}

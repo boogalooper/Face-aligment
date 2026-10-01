@@ -2,9 +2,9 @@
 setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
 
-set "INSTALLER_VERSION=2"
+set "INSTALLER_VERSION=1"
 set "MEDIAPIPE_VERSION=0.10.21"
-set "RUNTIME=%LOCALAPPDATA%\JazzyScripts\FaceAlignmentRuntime"
+set "RUNTIME=%LOCALAPPDATA%\FaceAlignmentRuntime"
 set "UV_DIR=%RUNTIME%\uv"
 set "UV_STAGE=%RUNTIME%\uv.new"
 set "UV=%UV_DIR%\uv.exe"
@@ -414,7 +414,7 @@ del /f /q "%LAUNCHER_TMP%" >nul 2>&1
 >>"%LAUNCHER_TMP%" echo Dim sh, fso, root, py, server, cmd
 >>"%LAUNCHER_TMP%" echo Set sh = CreateObject("WScript.Shell")
 >>"%LAUNCHER_TMP%" echo Set fso = CreateObject("Scripting.FileSystemObject")
->>"%LAUNCHER_TMP%" echo root = sh.ExpandEnvironmentStrings("%%LOCALAPPDATA%%") ^& "\JazzyScripts\FaceAlignmentRuntime"
+>>"%LAUNCHER_TMP%" echo root = sh.ExpandEnvironmentStrings("%%LOCALAPPDATA%%") ^& "\FaceAlignmentRuntime"
 >>"%LAUNCHER_TMP%" echo py = root ^& "\venv\Scripts\pythonw.exe"
 >>"%LAUNCHER_TMP%" echo server = sh.Environment("PROCESS")("FACE_ALIGNMENT_SERVER")
 >>"%LAUNCHER_TMP%" echo If Len(server) = 0 Then WScript.Quit 2

@@ -4,7 +4,6 @@ import socket
 import json
 import time
 import threading
-import multiprocessing
 import cv2
 import numpy as np
 import math
@@ -293,6 +292,64 @@ def measure_head(img, points):
 
 SERVER_ID = "face-alignment/0.143"
 
+# The JSX sends a heartbeat while a detection request is alive and an explicit
+# cancel when Photoshop progress is cancelled. MediaPipe calls themselves are
+# native/blocking, so cancellation is cooperative: stale results are discarded
+# immediately and the request is marked cancelled while the native call unwinds.
+REQUEST_HEARTBEAT_TIMEOUT = 4.0
+active_requests = {}
+active_requests_lock = threading.Lock()
+
+
+def register_active_request(request_id):
+    state = {"cancel": threading.Event(), "last_heartbeat": time.monotonic()}
+    with active_requests_lock:
+        active_requests[request_id] = state
+    return state
+
+
+def unregister_active_request(request_id):
+    with active_requests_lock:
+        active_requests.pop(request_id, None)
+
+
+def heartbeat_request(request_id):
+    with active_requests_lock:
+        state = active_requests.get(request_id)
+        if state is None:
+            return False
+        state["last_heartbeat"] = time.monotonic()
+        return True
+
+
+def cancel_request(request_id):
+    with active_requests_lock:
+        state = active_requests.get(request_id)
+        if state is None:
+            return False
+        state["cancel"].set()
+        return True
+
+
+def request_cancelled(state):
+    if state["cancel"].is_set():
+        return True
+    if time.monotonic() - state["last_heartbeat"] > REQUEST_HEARTBEAT_TIMEOUT:
+        state["cancel"].set()
+        return True
+    return False
+
+
+def cancellation_watchdog():
+    while True:
+        now = time.monotonic()
+        with active_requests_lock:
+            states = list(active_requests.values())
+        for state in states:
+            if now - state["last_heartbeat"] > REQUEST_HEARTBEAT_TIMEOUT:
+                state["cancel"].set()
+        time.sleep(0.25)
+
 
 pending_cleanup = set()
 cleanup_lock = threading.Lock()
@@ -351,205 +408,74 @@ def send_data_to_jsx(obj):
         connection.sendall((json.dumps(obj, ensure_ascii=True, allow_nan=False)+"\n").encode("ascii"))
 
 
-def detection_worker(connection):
-    # Windows spawn: keep one worker alive so normal requests reuse the models.
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, 'w')
-    if sys.stderr is None:
-        sys.stderr = open(os.devnull, 'w')
-    try:
-        while True:
-            message = connection.recv()
-            if message is None:
-                break
-            try:
-                path = message.get('message')
-                points = (detect_face_landmarks(path, message.get('head_support') is True)
-                          if message['type'] == 'face' else detect_pose(path))
-                connection.send(('answer', points))
-            except Exception as exc:
-                connection.send(('error', str(exc)))
-    except (EOFError, BrokenPipeError):
-        pass
-    finally:
-        connection.close()
-
-
-class DetectionCancelled(Exception):
-    pass
-
-
-class DetectionWorker:
-    def __init__(self, target=None):
-        self.target = target or detection_worker
-        self.process = None
-        self.connection = None
-        self.tainted = False
-
-    def stop(self):
-        process = self.process
-        if process is not None:
-            if process.is_alive():
-                process.terminate()
-            process.join(2)
-            if process.is_alive():
-                process.kill()
-                process.join(2)
-            if process.is_alive():
-                raise RuntimeError('Could not stop the detection process')
-            process.close()
-        if self.connection is not None:
-            self.connection.close()
-        self.process = self.connection = None
-        self.tainted = False
-
-    def ensure(self):
-        if self.tainted:
-            self.stop()
-        if self.process is not None and self.process.is_alive():
-            return
-        self.stop()
-        context = multiprocessing.get_context('spawn')
-        parent, child = context.Pipe()
-        process = context.Process(target=self.target, args=(child,), daemon=True)
-        try:
-            process.start()
-        except Exception:
-            parent.close()
-            child.close()
-            raise
-        child.close()
-        self.process, self.connection = process, parent
-
-    def run(self, message, job):
-        try:
-            if job['cancel'].is_set():
-                raise DetectionCancelled('Detection cancelled')
-            self.ensure()
-            self.connection.send(message)
-            while True:
-                now = time.monotonic()
-                if job['cancel'].is_set():
-                    raise DetectionCancelled('Detection cancelled')
-                if now >= job['deadline']:
-                    raise DetectionCancelled('Detection timeout')
-                if now - job['heartbeat'] > 8:
-                    raise DetectionCancelled('Photoshop stopped responding')
-                if self.connection.poll(.05):
-                    result = self.connection.recv()
-                    if job['cancel'].is_set():
-                        raise DetectionCancelled('Detection cancelled')
-                    return result
-                if not self.process.is_alive():
-                    raise RuntimeError('Detection process exited unexpectedly')
-        except Exception:
-            # terminate/kill interrupts native MediaPipe/OpenCV, not just Python code.
-            self.tainted = True
-            self.stop()
-            raise
-
-
-worker = DetectionWorker()
-job_state_lock = threading.Lock()
-active_job = None
-cancelled_requests = {}
-
-
-def cancel_job(request_id):
-    if not isinstance(request_id, str) or not request_id:
-        return False
-    now = time.monotonic()
-    with job_state_lock:
-        for key, until in list(cancelled_requests.items()):
-            if until < now:
-                del cancelled_requests[key]
-        # Covers cancel arriving before the detection handler registers its job.
-        cancelled_requests[request_id] = now + 120
-        job = active_job
-        if job is not None and job['id'] == request_id:
-            job['cancel'].set()
-        else:
-            return True
-    return job['done'].wait(5) and job['stopped']
-
-
-def heartbeat_job(request_id):
-    with job_state_lock:
-        if active_job is not None and active_job['id'] == request_id:
-            active_job['heartbeat'] = time.monotonic()
-
-
 def handle_client(client_socket):
-    global last_request_time, active_job
+    global last_request_time
     request_id = None
+
     def reply(kind, message):
-        send_data_to_jsx({'type': kind, 'message': message,
-                          'request_id': request_id, 'server_id': SERVER_ID})
+        send_data_to_jsx({"type":kind, "message":message, "request_id":request_id, "server_id":SERVER_ID})
+
     try:
         with client_socket:
-            client_socket.settimeout(6)
+            client_socket.settimeout(5)
             message = receive_json(client_socket)
-            request_id = message.get('request_id')
-            kind = message.get('type')
-            last_request_time = time.monotonic()
-            if kind == 'cancel':
-                stopped = cancel_job(message.get('target_id'))
-                client_socket.sendall((json.dumps({'stopped': stopped})+'\n').encode('ascii'))
-                return
-            if kind == 'heartbeat':
-                heartbeat_job(message.get('target_id'))
-                return
-        if kind == 'handshake':
-            reply('answer', SERVER_ID)
-        elif kind == 'cleanup':
-            reply('answer', queue_preview_cleanup(message.get('message')))
-        elif kind in ('face', 'pose'):
-            if not isinstance(request_id, str) or not request_id:
-                reply('error', 'Missing request ID')
-                return
-            if not request_lock.acquire(False):
-                reply('error', 'Detection is busy')
-                return
-            job = {'id': request_id, 'cancel': threading.Event(), 'done': threading.Event(),
-                   'deadline': time.monotonic()+60, 'heartbeat': time.monotonic(), 'stopped': False}
-            completed = False
-            try:
-                with job_state_lock:
-                    active_job = job
-                    if cancelled_requests.get(request_id, 0) >= time.monotonic():
-                        job['cancel'].set()
-                result_type, result = worker.run(message, job)
-                completed = True
-            except DetectionCancelled as exc:
-                result_type, result = 'cancelled', str(exc)
-            except Exception as exc:
-                logging.exception('Detection worker failed')
-                result_type, result = 'error', str(exc)
-            finally:
-                with job_state_lock:
-                    active_job = None
-                    cancelled_requests.pop(request_id, None)
+            kind = message.get("type")
+
+            # Control messages are answered on the same socket (cancel) or need
+            # no response at all (heartbeat). They must never consume the JSX
+            # response listener used by the actual detection request.
+            if kind == "heartbeat":
+                heartbeat_request(message.get("target_id"))
                 last_request_time = time.monotonic()
-                # Acknowledge cancellation only after the worker has exited and
-                # the slot is available for the next request.
-                job['stopped'] = completed or worker.process is None
+                return
+            if kind == "cancel":
+                stopped = cancel_request(message.get("target_id"))
+                last_request_time = time.monotonic()
+                client_socket.sendall((json.dumps({"stopped": bool(stopped)}) + "\n").encode("ascii"))
+                return
+
+        request_id = message.get("request_id")
+        last_request_time = time.monotonic()
+        if kind == "handshake":
+            reply("answer", SERVER_ID)
+        elif kind == "cleanup":
+            reply("answer", queue_preview_cleanup(message.get("message")))
+        elif kind in ("face", "pose"):
+            state = register_active_request(request_id)
+            if not request_lock.acquire(False):
+                unregister_active_request(request_id)
+                reply("error", "Detection is busy; wait for the previous request to finish.")
+                return
+            try:
+                if request_cancelled(state):
+                    reply("cancelled", "Operation cancelled")
+                    return
+                path = message.get("message")
+                points = (detect_face_landmarks(path, message.get("head_support") is True)
+                          if kind == "face" else detect_pose(path))
+                if request_cancelled(state):
+                    reply("cancelled", "Operation cancelled")
+                else:
+                    reply("answer", points)
+            finally:
+                unregister_active_request(request_id)
+                last_request_time = time.monotonic()
                 request_lock.release()
-                job['done'].set()
                 flush_preview_cleanup()
-            if not job['cancel'].is_set():
-                reply(result_type, result)
         else:
-            reply('error', 'Unknown request')
+            reply("error", "Unknown request")
     except Exception as exc:
-        logging.exception('Request failed')
+        logging.exception("Request failed")
         try:
-            reply('error', str(exc))
+            reply("error", str(exc))
         except Exception:
             pass
+
 
 def start_server():
     global last_request_time
     last_request_time = time.monotonic()
+    threading.Thread(target=cancellation_watchdog, daemon=True).start()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -576,7 +502,6 @@ def check_task(path, kind):
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
     if "--check-task" in sys.argv:
         check_task(sys.argv[2], sys.argv[3])
     elif "--self-test" in sys.argv:
@@ -599,5 +524,3 @@ if __name__ == "__main__":
             start_server()
         except OSError:
             logging.exception("Server could not bind its dedicated port")
-        finally:
-            worker.stop()

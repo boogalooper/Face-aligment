@@ -16,7 +16,7 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.141,
+const ver = 0.142,
     API_HOST = '127.0.0.1',
     API_PORT_SEND = 6330,
     API_PORT_LISTEN = 6331,
@@ -434,7 +434,7 @@ function portraitScale(base, target, useHead) {
 
 function transformLayers(targetLayers, baseLayer) {
     var len = targetLayers.length,
-        tmp = [],
+        tmp = [baseLayer.id],
         slice = 1 / (targetLayers.length);
     lr.selectNoLayers();
     for (var i = 0; i < len; i++) {
@@ -654,7 +654,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     function runtimeFiles() {
         var local=$.getenv('LOCALAPPDATA');
         if(!local) throw new Error('LOCALAPPDATA is unavailable.');
-        var root=local+'/JazzyScripts/FaceAlignmentRuntime';
+        var root=local+'/FaceAlignmentRuntime';
         return {root:root,python:new File(root+'/venv/Scripts/pythonw.exe'),
             launcher:new File(root+'/launcher.vbs'),marker:new File(root+'/runtime_version.txt')};
     }

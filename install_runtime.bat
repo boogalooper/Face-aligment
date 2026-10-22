@@ -267,10 +267,10 @@ if errorlevel 1 (
 exit /b 0
 
 :check_server_not_running
-"%PY%" -c "import socket; s=socket.socket(); s.settimeout(0.25); r=s.connect_ex(('127.0.0.1',6330)); s.close(); raise SystemExit(0 if r==0 else 1)" >nul 2>&1
+"%PY%" -c "import socket; s=socket.socket(); s.settimeout(0.25); r=s.connect_ex(('127.0.0.1',6350)); s.close(); raise SystemExit(0 if r==0 else 1)" >nul 2>&1
 if not errorlevel 1 (
     echo.
-    echo [ERROR] TCP port 6330 is currently in use.
+    echo [ERROR] TCP port 6350 is currently in use.
     echo The FaceAlignment Python server may still be running.
     echo Close Photoshop or wait for the server's 15-minute idle timeout, then run this installer again.
     exit /b 1
@@ -278,7 +278,7 @@ if not errorlevel 1 (
 exit /b 0
 
 :ensure_packages
-"%PY%" -c "import importlib.metadata as m,sys; ok=(m.version('numpy')=='%NUMPY_VERSION%' and m.version('opencv-contrib-python')=='%OPENCV_VERSION%'); import numpy,cv2,mediapipe; ok=ok and m.version('mediapipe')=='%MEDIAPIPE_VERSION%'; ok=ok and hasattr(cv2,'FaceDetectorYN') and hasattr(cv2,'dnn'); raise SystemExit(0 if ok else 1)" >nul 2>&1
+"%PY%" -c "import importlib.metadata as m,sys; ok=(m.version('numpy')=='%NUMPY_VERSION%' and m.version('opencv-contrib-python')=='%OPENCV_VERSION%'); import numpy,cv2,mediapipe,PIL; ok=ok and m.version('mediapipe')=='%MEDIAPIPE_VERSION%'; ok=ok and hasattr(cv2,'FaceDetectorYN') and hasattr(cv2,'dnn'); raise SystemExit(0 if ok else 1)" >nul 2>&1
 if not errorlevel 1 (
     echo Existing Python packages OK.
     "%UV%" pip check --python "%PY%"
@@ -290,9 +290,9 @@ if not errorlevel 1 (
 echo.
 echo Installing pinned binary packages into the private venv...
 if "%PIP_INSECURE%"=="1" (
-    "%UV%" pip install --python "%PY%" --upgrade --no-build "numpy==%NUMPY_VERSION%" "opencv-contrib-python==%OPENCV_VERSION%" "mediapipe==%MEDIAPIPE_VERSION%" "jax==0.4.30" "jaxlib==0.4.30" --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org
+    "%UV%" pip install --python "%PY%" --upgrade --no-build "numpy==%NUMPY_VERSION%" "opencv-contrib-python==%OPENCV_VERSION%" "mediapipe==%MEDIAPIPE_VERSION%" "pillow>=10.3" "jax==0.4.30" "jaxlib==0.4.30" --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org
 ) else (
-    "%UV%" pip install --python "%PY%" --upgrade --no-build "numpy==%NUMPY_VERSION%" "opencv-contrib-python==%OPENCV_VERSION%" "mediapipe==%MEDIAPIPE_VERSION%" "jax==0.4.30" "jaxlib==0.4.30"
+    "%UV%" pip install --python "%PY%" --upgrade --no-build "numpy==%NUMPY_VERSION%" "opencv-contrib-python==%OPENCV_VERSION%" "mediapipe==%MEDIAPIPE_VERSION%" "pillow>=10.3" "jax==0.4.30" "jaxlib==0.4.30"
 )
 if errorlevel 1 (
     if "%PIP_INSECURE%"=="1" (
@@ -514,7 +514,7 @@ echo ==============================================
 echo Installation failed or was cancelled.
 echo ==============================================
 echo Existing verified models and runtime files were not deliberately removed.
-echo If the message mentions port 6330, close Photoshop or wait for FaceAlignment's
+echo If the message mentions port 6350, close Photoshop or wait for FaceAlignment's
 
 echo Python server to exit and run the installer again.
 echo.

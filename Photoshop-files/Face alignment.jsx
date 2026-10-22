@@ -16,15 +16,16 @@
 </javascriptresource>
 // END__HARVEST_EXCEPTION_ZSTRING
 */
-const ver = 0.143,
+// true: прежний путь — открыть подготовленный смарт-объект и сохранить JPEG.
+// false или отсутствие константы: экспорт PSB без открытия содержимого.
+const USE_LEGACY_JPEG = false;
+const ver = 0.157,
     API_HOST = '127.0.0.1',
-    API_PORT_SEND = 6330,
-    API_PORT_LISTEN = 6331,
+    API_PORT_SEND = 6350,
+    API_PORT_LISTEN = 6351,
     API_FILE = 'face-detect-api',
     INIT_DELAY = 60000,
     DETECTION_DELAY = 60000,
-    PROGRESS_DELAY = 2500,
-    PING_DELAY = 100,
     UUID = '7a4144e4-943e-4b5f-8d40-06dfc90b682b';
 var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, API_FILE),
     s2t = stringIDToTypeID,
@@ -33,13 +34,10 @@ var fd = new faceApi(API_HOST, API_PORT_SEND, API_PORT_LISTEN, API_FILE),
     lr = new AM('layer'),
     str = new Locale(),
     cfg = new Config(),
-    inAction = true,
-    isDirty = false,
-    pendingPreviews = [];
+    pendingPreviews = [],
+    operationStage = 'Initialize';
 isCancelled = false;
 $.localize = true
-//$.locale = 'ru'
-isCancelled ? 'cancel' : undefined;
 if (!app.playbackParameters.count || app.playbackParameters.count == 1) {
     cfg.getScriptSettings()
     var w = dialog(); var result = w.show()
@@ -68,29 +66,63 @@ function throwCancelled() {
     e.number = 8007;
     throw e;
 }
+function validateInputDocument() {
+    if(!apl.getProperty('numberOfDocuments')) return localize(str.errDoc);
+    var mode=doc.getProperty('mode'), value=typeof mode=='string'?mode:(mode && mode.value);
+    if(value!='RGBColor' && value!='RGBColorMode') return localize(str.errRGB);
+    var depth=doc.getProperty('depth');
+    if(depth!=8 && depth!=16 && depth!=32) return localize(str.errDepth);
+    return null;
+}
 function main() {
+    var inputError=validateInputDocument();
+    if(inputError) {
+        if(!cfg.silentMode) alert(inputError,localize(str.err));
+        return;
+    }
     try {
-        var curentState = doc.getSelectionMode(),
-            targetLayers = getSelectedLayers(),
-            docState = activeDocument.currentHistoryState,
-            docId = doc.getProperty('documentID');
+        var sourceDocument=app.activeDocument,
+            docState=sourceDocument.activeHistoryState,
+            targetLayers=getSelectedLayers(),
+            originalSelection=targetLayers.slice(0), alignmentError=null;
         if (targetLayers.length > 1 && fd.init()) {
-            if (curentState == 'imageProcessingModeCloud') doc.setSelectionMode('imageProcessingModeDevice');
             if (targetLayers.length <= 2) getKeyPoints(targetLayers);
             else if (app.doProgressSegmentTask(targetLayers.length, 0, targetLayers.length * 2, "getKeyPoints(targetLayers)") === false) throwCancelled();
             if (isCancelled) throwCancelled();
-            if (targetLayers[0] instanceof Object && targetLayers[0].measurement && targetLayers[0].measurement.middle)
-                app.activeDocument.suspendHistory("Face alignment", (targetLayers.length <= 2 || cfg.dialogMode ? 'transformLayers(targetLayers, targetLayers.shift())' : 'app.doProgressSegmentTask(' + [targetLayers.length, targetLayers.length, targetLayers.length * 2].join(', ') + ', "transformLayers(targetLayers, targetLayers.shift())")'))
-            else throw new Error(str.errBaseLayer)
+            if (targetLayers[0] instanceof Object && targetLayers[0].measurement && targetLayers[0].measurement.middle) {
+                sourceDocument.suspendHistory('Face alignment','applyAlignment()');
+                if(alignmentError) throw alignmentError;
+                if(isCancelled) throwCancelled();
+            } else throw new Error(str.errBaseLayer)
         } else { throw new Error(str.errLr) }
     } catch (e) {
-        if (doc.getProperty('documentID') != docId) doc.close(false);
-        activeDocument.currentHistoryState = docState;
-        if (!cfg.silentMode && !(e.number && e.number == 8007)) alert(e, str.err)
+        var details=e.message+'\nStage: '+operationStage+(e.line?'\nLine: '+e.line:'');
+        try {
+            if (sourceDocument && docState) {
+                app.activeDocument=sourceDocument;
+                sourceDocument.suspendHistory('Face alignment','function historyBoundary() {}');
+                sourceDocument.activeHistoryState=docState;
+            }
+        } catch(restoreError) {
+            details+='\nHistory restore: '+restoreError.message;
+        }
+        if (!cfg.silentMode && !(e.number && e.number == 8007)) alert(details, str.err)
     } finally {
         cleanupPreviews();
+        if(originalSelection && originalSelection.length) try {
+            operationStage='Restore original layer selection';
+            lr.selectLayers(originalSelection);
+        } catch(restoreSelectionError) {$.writeln(restoreSelectionError.message);}
     }
-    doc.setSelectionMode(curentState);
+    function applyAlignment() {
+        // Finish the native history callback normally before reporting errors.
+        try {
+            var count=targetLayers.length;
+            if(count<=2 || cfg.dialogMode) transformLayers(targetLayers,targetLayers.shift());
+            else if(app.doProgressSegmentTask(count,count,count*2,
+                'transformLayers(targetLayers, targetLayers.shift())')===false) throwCancelled();
+        } catch(e) {alignmentError=e;}
+    }
 }
 function removePreview(path) {
     for (var attempt = 0; attempt < 3; attempt++) {
@@ -105,10 +137,11 @@ function cleanupPreviews() {
         var path = pendingPreviews[i];
         if (!removePreview(path)) {
             try { fd.cleanup(path); } catch (e) { }
-            if (!removePreview(path)) $.writeln('Face alignment: deferred JPEG cleanup: ' + path);
+            if (!removePreview(path)) $.writeln('Face alignment: deferred preview cleanup: ' + path);
         }
     }
-    pendingPreviews = [];
+    pendingPreviews = [],
+    operationStage = 'Initialize';
 }
 function dialog(mode) {
     var dialog = new Window("dialog{orientation:'column',alignChildren:['fill','top'],spacing:10,margins:16}"),
@@ -230,161 +263,213 @@ function getSelectedLayers() {
     return output
 }
 function getKeyPoints(lrs) {
-    app.activeDocument.suspendHistory("Detect key points", "function blankState () {return}")
-    var slice = 1 / (lrs.length);
-    for (var i = 0; i < lrs.length; i++) {
-        var text = "Detecting key points in layer: " + lr.getProperty("name", lrs[i]);
-        if (app.doProgressTask(slice, "workChunk(text, lrs, i)") === false) throwCancelled();
-    }
-    function workChunk(text, lrs, i) {
-        lr.selectLayers([lrs[i]])
-        var measurement = {};
-        measurement['bounds'] = lr.descToObject(lr.getProperty("boundsNoEffects", lrs[i]).value);
-        app.activeDocument.suspendHistory("Measure subject", "measureSubject (measurement)")
-        if (i == 0 && measurement.middle == undefined) throw new Error(str.errBaseLayer)
-        doc.selectPreviousHistoryState()
-        if (measurement.middle) lrs[i] = new convertToAbsolute(lrs[i], measurement)
-        app.changeProgressText(text);
-        $.sleep(0);
-    }
-    function measureSubject(o) {
-        if (lr.hasProperty('smartObject')) lr.rasterize();
-        lr.convertToSmartObject()
-        lr.editSmartObject()
-        doc.flatten()
-        doc.convertToRGB()
-        var docRes = doc.getProperty('resolution'),
-            docW = doc.getProperty('width') * docRes / 72,
-            docH = doc.getProperty('height') * docRes / 72,
-            f = new File(Folder.temp + '/FD_' + doc.getProperty('documentID') + '_' + (new Date()).getTime() + '_' + Math.floor(Math.random() * 1000000) + '.jpg'),
-            k = cfg.tile ? cfg.detectSize / (docW < docH ? docW : docH) : 1;
-        pendingPreviews.push(f.fsName);
+    var batch = fd.sendPayload('batch_begin', {auto:cfg.auto, pose:cfg.pose,
+        legs:cfg.legs, head_support:!!(cfg.headSupport && cfg.resize)}),
+        legacyJPEG=typeof USE_LEGACY_JPEG!='undefined' && USE_LEGACY_JPEG===true,
+        records=[], originalIDs=lrs.slice(0), result,
+        historyDocument=app.activeDocument, baseline=historyDocument.activeHistoryState,
+        baselineLayerCount=doc.getProperty('numberOfLayers'),
+        preparationError=null, preparationStage='', sourceDocID=doc.getProperty('documentID');
+    try {
+        if(!sourceDocID) throw new Error('Cannot read source document ID');
+        // Capture all original measurements before changing any layer.
+        for(var i=0;i<originalIDs.length;i++) {
+            var id=originalIDs[i], o={
+                bounds:lr.descToObject(lr.getProperty('boundsNoEffects',id).value),
+                sourceKind:lr.getProperty('layerKind',id),
+                name:lr.getProperty('name',id)};
+            records.push(o);
+        }
         try {
-        k < 1 ? doc.setScale(k) : k = 1;
-        doc.saveACopy(f)
-        if (cfg.auto && !isDirty) {
-            var mesh = fd.sendPayload('pose', f.fsName),
-                detectW = docW * k,
-                detectH = docH * k;
-            if (mesh) {
-                cfg.pose = pointIsVisible(mesh[23], detectW, detectH) && pointIsVisible(mesh[24], detectW, detectH);
-                cfg.legs = cfg.pose && pointIsVisible(mesh[27], detectW, detectH) && pointIsVisible(mesh[28], detectW, detectH);
-            } else {
-                cfg.pose = false
-                cfg.legs = false
-            }
-            isDirty = true
-        }
-        if (!(mesh && cfg.pose)) {
-            var mesh = fd.sendPayload(cfg.pose ? 'pose' : 'face', f.fsName);
-        }
-        if (mesh) {
-            calcDimensions(o, mesh)
-        } else {
-            if (!cfg.pose) {
-                var mesh = fd.sendPayload('pose', f.fsName);
-                if (mesh) {
-                    var fp = findPairPoints(mesh, [[5, 2], [6, 3], [4, 1], [8, 7], [0, 0], [10, 9]]),
-                        bp = findPairPoints(mesh, [[12, 11], [24, 23], [14, 13]]);
-                    if (fp && bp && mesh[0]) {
-                        var faceRect = {},
-                            detectW = docW * k,
-                            detectH = docH * k,
-                            x1 = mesh[fp[0]][0],
-                            x2 = mesh[fp[1]][0];
-                        faceRect.left = x1 < x2 ? x1 : x2
-                        faceRect.right = x1 > x2 ? x1 : x2
-                        faceRect.bottom = mesh[bp[0]][1] > mesh[bp[1]][1] ? mesh[bp[0]][1] : mesh[bp[1]][1]
-                        faceRect.top = mesh[0][1] - (faceRect.bottom - mesh[0][1])
-                        var faceW = faceRect.right - faceRect.left,
-                            faceH = faceRect.bottom - faceRect.top,
-                            padX = faceW * 0.2,
-                            padY = faceH * 0.2;
-                        faceRect.left = Math.max(0, faceRect.left - padX)
-                        faceRect.right = Math.min(detectW, faceRect.right + padX)
-                        faceRect.top = Math.max(0, faceRect.top - padY)
-                        faceRect.bottom = Math.min(detectH, faceRect.bottom + padY)
-                        if (faceRect.right > faceRect.left && faceRect.bottom > faceRect.top) doc.makeSelection(faceRect, false)
-                    }
-                }
-                if (!doc.getProperty('selection')) {
-                    try { doc.selectSubject(); } catch (e) { }
-                }
-                if (doc.getProperty('selection')) {
-                    var relativeBounds = doc.descToObject(doc.getProperty('selection').value);
-                    doc.crop(true)
-                    doc.saveACopy(f)
-                    var mesh = fd.sendPayload('face', f.fsName);
-                    if (mesh) calcDimensions(o, mesh, relativeBounds.left, relativeBounds.top)
-                }
-            }
-        }
+            // One temporary history transaction for the complete export batch.
+            historyDocument.suspendHistory('Prepare layer previews','exportPreviews()');
+        } catch(e) {
+            preparationError=e; preparationStage=operationStage;
         } finally {
-            // Closing the preview must not prevent file cleanup on errors/cancel.
-            try { doc.close(); } finally {
-                if (!removePreview(f.fsName)) {
-                    try { fd.cleanup(f.fsName); } catch (cleanupError) { }
+            operationStage='Restore original document after preview export';
+            restoreBatch();
+        }
+        if(preparationError) {operationStage=preparationStage; throw preparationError;}
+        operationStage='Wait for Python analysis';
+        app.changeProgressText(operationStage);
+        result=fd.sendPayload('batch_finish',{batch_id:batch});
+        if(!result || !result.items || result.items.length!=originalIDs.length)
+            throw new Error('Python returned an incomplete layer analysis batch');
+        cfg.pose=result.pose; cfg.legs=result.legs;
+        for(var i=0;i<originalIDs.length;i++) {
+            operationStage='Map landmarks for layer ID '+originalIDs[i];
+            var item=result.items[i], o=records[i];
+            if(item.error) throw new Error('Layer '+lr.getProperty('name',originalIDs[i])+': '+item.error+
+                (item.diagnostics?'\nDiagnostics: '+item.diagnostics:''));
+            if(item.mesh) {
+                // Map exported pixel coordinates through the new SO quadrilateral,
+                // then undo only the temporary detector downscale.
+                var mesh=item.mesh, q=o.quad, ratioX=(q[2]-q[0])/item.width/o.scale,
+                    ratioY=(q[7]-q[1])/item.height/o.scale,
+                    offsetX=o.cx+(q[0]-o.cx)/o.scale-o.bounds.left,
+                    offsetY=o.cy+(q[1]-o.cy)/o.scale-o.bounds.top;
+                if(!(isFinite(ratioX) && isFinite(ratioY) && ratioX>0 && ratioY>0 &&
+                    isFinite(offsetX) && isFinite(offsetY)))
+                    throw new Error('Invalid PSB coordinate mapping for layer '+originalIDs[i]);
+                for(var key in mesh) if(mesh.hasOwnProperty(key) && key!='head') {
+                    mesh[key][0]=mesh[key][0]*ratioX+offsetX;
+                    mesh[key][1]=mesh[key][1]*ratioY+offsetY;
                 }
+                if(mesh.head) mesh.head.height*=Math.sqrt(Math.abs(ratioX*ratioY));
+                calcDimensions(o,mesh);
+                validateLandmarkGeometry(o);
+                if(o.middle) lrs[i]=new convertToAbsolute(originalIDs[i],o);
             }
+            if(i==0 && !o.middle) throw new Error(str.errBaseLayer);
         }
-        function pointIsVisible(p, width, height) {
-            return p && p[2] > 0.5 && p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height;
-        }
-        function calcDimensions(o, mesh, dX, dY) {
-            try {
-                dX = dX ? dX : 0;
-                dY = dY ? dY : 0;
-                var fp = null, bp = null;
-                if (cfg.pose) {
-                    fp = findPairPoints(mesh, [[5, 2], [6, 3], [4, 1], [8, 7], [0, 0], [10, 9]])
-                    bp = cfg.legs ? findPairPoints(mesh, [[28, 27], [26, 25], [32, 31], [30, 29]]) : findPairPoints(mesh, [[24, 23], [26, 25]]);
-                    if (!fp || !bp) throw new Error()
-                }
-                o['left'] = [(mesh[cfg.pose ? fp[0] : 33][0] + dX) * 1 / k, (mesh[cfg.pose ? fp[0] : 33][1] + dY) * 1 / k]
-                o['right'] = [(mesh[cfg.pose ? fp[1] : 263][0] + dX) * 1 / k, (mesh[cfg.pose ? fp[1] : 263][1] + dY) * 1 / k]
-                if (cfg.pose) {
-                    o['bodyLeft'] = [(mesh[bp[0]][0] + dX) * 1 / k, (mesh[bp[0]][1] + dY) * 1 / k]
-                    o['bodyRight'] = [(mesh[bp[1]][0] + dX) * 1 / k, (mesh[bp[1]][1] + dY) * 1 / k]
-                    o['bottom'] = getMidpoint(o['bodyRight'], o['bodyLeft'])
-                    o['middle'] = getMidpoint(o['left'], o['right'])
-                } else {
-                    o['metrics'] = faceMetrics(mesh, k);
-                    o['faceLeft'] = [(mesh[127][0] + dX) * 1 / k, (mesh[127][1] + dY) * 1 / k]
-                    o['faceRight'] = [(mesh[356][0] + dX) * 1 / k, (mesh[356][1] + dY) * 1 / k]
-                    o['bottom'] = [(mesh[152][0] + dX) * 1 / k, (mesh[152][1] + dY) * 1 / k]
-                    o['middle'] = getMidpoint(o['faceRight'], o['faceLeft'])
-                }
-            } catch (e) { }
-        }
-        function findPairPoints(mesh, pairs) {
-            for (var i = 0; i < pairs.length; i++) {
-                if (mesh[pairs[i][0]] && mesh[pairs[i][1]]) return pairs[i]
-            }
-            return null
-        }
-        function getMidpoint(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
+    } finally {
+        try {fd.sendPayload('batch_abort',{batch_id:batch});} catch(ignore) {}
     }
+    function exportPreviews() {
+        // Let the host close the history transaction even after an error/cancel.
+        try {
+            for(var i=0;i<originalIDs.length;i++) {
+                if(app.updateProgress(i,originalIDs.length)===false) throwCancelled();
+                var id=originalIDs[i], o=records[i],
+                    f=new File(Folder.temp+'/FD_'+sourceDocID+'_'+(new Date()).getTime()+
+                        '_'+Math.floor(Math.random()*1000000)+(legacyJPEG?'.jpg':'.psb'));
+                app.changeProgressText(localize(str.preparingLayer)+': '+o.name);
+                operationStage='Prepare layer ID '+id;
+                lr.selectLayers([id]);
+                pendingPreviews.push(f.fsName);
+                preparePreview(o,f);
+                fd.sendPayload('batch_add',{batch_id:batch,index:i,path:f.fsName});
+            }
+        } catch(e) {preparationError=e; preparationStage=operationStage;}
+    }
+    function historyBoundary() {}
+    function restoreBatch() {
+        // Close the deferred native history boundary before restoring the source.
+        app.activeDocument=historyDocument;
+        historyDocument.suspendHistory('Prepare layer previews','historyBoundary()');
+        historyDocument.activeHistoryState=baseline;
+        if(!batchIsRestored())
+            throw new Error('History did not restore the document after preview export');
+    }
+    function batchIsRestored() {
+        if(doc.getProperty('numberOfLayers')!=baselineLayerCount) return false;
+        for(var j=0;j<originalIDs.length;j++)
+            if(!originalIsRestored(originalIDs[j],records[j])) return false;
+        return true;
+    }
+    function originalIsRestored(sourceID,o) {
+        // A successful layerKind lookup also confirms that the source ID exists.
+        if(lr.getProperty('layerKind',sourceID)!=o.sourceKind) return false;
+        var restored=lr.getProperty('boundsNoEffects',sourceID);
+        if(!restored) return false;
+        var bounds=lr.descToObject(restored.value), keys=['left','top','right','bottom'];
+        for(var j=0;j<keys.length;j++)
+            if(!isFinite(bounds[keys[j]]) || Math.abs(bounds[keys[j]]-o.bounds[keys[j]])>.001) return false;
+        return true;
+    }
+    function preparePreview(o,f) {
+        operationStage='Rasterize preview';
+        if(lr.hasProperty('smartObject')) lr.rasterize();
+        var b=lr.descToObject(lr.getProperty('boundsNoEffects').value),
+            w=b.right-b.left, h=b.bottom-b.top;
+        if(!(w>0 && h>0)) throw new Error('Empty layer bounds');
+        o.cx=(b.left+b.right)/2; o.cy=(b.top+b.bottom)/2;
+        o.scale=cfg.tile ? Math.min(1,cfg.detectSize/Math.min(w,h)) : 1;
+        operationStage='Resize preview';
+        if(o.scale<1) lr.resizePreview(o.scale);
+        operationStage='Convert preview to Smart Object';
+        lr.convertToSmartObject();
+        var more=lr.getProperty('smartObjectMore').value,
+            tr=more.getList(s2t('transform'));
+        o.quad=[];
+        for(var j=0;j<8;j++) o.quad.push(tr.getDouble(j));
+        if(legacyJPEG) {
+            var previewDocument=null;
+            try {
+                operationStage='Open prepared Smart Object';
+                lr.editSmartObject();
+                var openedID=doc.getProperty('documentID');
+                if(!openedID || openedID==sourceDocID)
+                    throw new Error('Cannot confirm the prepared Smart Object document');
+                previewDocument=app.activeDocument;
+                operationStage='Save JPEG preview';
+                doc.prepareJPEG();
+                doc.saveACopy(f);
+                if(!f.exists || !f.length) throw new Error('JPEG save did not create a preview');
+            } finally {
+                // Edit Contents can open the child and then raise an error.
+                if(!previewDocument) {
+                    var currentID=doc.getProperty('documentID');
+                    if(currentID && currentID!=sourceDocID) previewDocument=app.activeDocument;
+                }
+                if(previewDocument) {
+                    try {
+                        app.activeDocument=previewDocument;
+                        doc.close(false);
+                    } finally {app.activeDocument=historyDocument;}
+                }
+            }
+        } else {
+            operationStage='Export PSB preview';
+            lr.exportSmartObject(f);
+            if(!f.exists || !f.length) throw new Error('Smart object export did not create a PSB');
+        }
+    }
+    function validateLandmarkGeometry(o) {
+        var keys=['left','right','middle','bottom'];
+        for(var j=0;j<keys.length;j++) {
+            var p=o[keys[j]];
+            if(!p || !isFinite(p[0]) || !isFinite(p[1]))
+                throw new Error('Landmark geometry contains invalid coordinates');
+        }
+        if(o.left[0]==o.right[0] && o.left[1]==o.right[1])
+            throw new Error('Landmark geometry has zero face width');
+        if(cfg.pose && o.bottom[0]==o.middle[0] && o.bottom[1]==o.middle[1])
+            throw new Error('Landmark geometry has zero body height');
+    }
+    function calcDimensions(o, mesh) {
+        try {
+            var fp=null, bp=null;
+            if(cfg.pose) {
+                fp=findPairPoints(mesh,[[5,2],[6,3],[4,1],[8,7],[0,0],[10,9]]);
+                bp=findPairPoints(mesh,cfg.legs?[[28,27],[26,25],[32,31],[30,29]]:[[24,23],[26,25]]);
+                if(!fp || !bp) throw new Error('Required body landmark pairs are missing');
+            }
+            var left=mesh[cfg.pose?fp[0]:33], right=mesh[cfg.pose?fp[1]:263];
+            o.left=[left[0],left[1]];
+            o.right=[right[0],right[1]];
+            if(cfg.pose) {
+                o.bottom=getMidpoint(mesh[bp[0]],mesh[bp[1]]);
+                o.middle=getMidpoint(o.left,o.right);
+            } else {
+                o.metrics=faceMetrics(mesh);
+                o.bottom=[mesh[152][0],mesh[152][1]];
+                o.middle=getMidpoint(mesh[127],mesh[356]);
+            }
+        } catch(e) {throw new Error('Landmark geometry: '+e.message);}
+    }
+    function findPairPoints(mesh,pairs) {
+        for(var i=0;i<pairs.length;i++)
+            if(mesh[pairs[i][0]] && mesh[pairs[i][1]]) return pairs[i];
+        return null;
+    }
+    function getMidpoint(a,b) {return [(a[0]+b[0])/2,(a[1]+b[1])/2];}
     function convertToAbsolute(id, points) {
         this.id = id
         this.angle = Math.atan2(points.right[1] - points.left[1], points.right[0] - points.left[0]) * 180 / Math.PI
-        this.width = Math.sqrt(Math.pow(points.right[0] - points.left[0], 2) + Math.pow(points.right[1] - points.left[1], 2))
-        this.height = Math.sqrt(Math.pow(points.bottom[0] - points.middle[0], 2) + Math.pow(points.bottom[1] - points.middle[1], 2))
+        if(cfg.pose) this.height = Math.sqrt(Math.pow(points.bottom[0] - points.middle[0], 2) + Math.pow(points.bottom[1] - points.middle[1], 2))
         this.measurement = points
         this.metrics = points.metrics;
         points.middle[0] += points.bounds.left
         points.middle[1] += points.bounds.top
-        if (!cfg.pose) {
-            this.widthLeft = Math.sqrt(Math.pow(points.faceLeft[0] - points.left[0], 2) + Math.pow(points.faceLeft[1] - points.left[1], 2))
-            this.widthRight = Math.sqrt(Math.pow(points.faceRight[0] - points.right[0], 2) + Math.pow(points.faceRight[1] - points.right[1], 2))
-        }
-        return this
+
     }
 }
 // Distances are rotation-invariant and measured before adding layer offsets.
-function faceMetrics(mesh, k) {
+function faceMetrics(mesh) {
     function point(i) {
         var p = mesh[i];
-        return p && isFinite(p[0]) && isFinite(p[1]) ? [p[0]/k,p[1]/k] : null;
+        return p && isFinite(p[0]) && isFinite(p[1]) ? [p[0],p[1]] : null;
     }
     function mid(a,b) { return a && b ? [(a[0]+b[0])/2,(a[1]+b[1])/2] : null; }
     function distance(a,b) {
@@ -399,7 +484,7 @@ function faceMetrics(mesh, k) {
         templeWidth: distance(point(127),point(356)),
         eyeChin: distance(eyes,point(152)),
         upperFace: distance(point(168),point(152)),
-        head: mesh.head && mesh.head.quality >= .8 && isFinite(mesh.head.height) ? mesh.head.height/k : 0
+        head: mesh.head && mesh.head.quality >= .8 && isFinite(mesh.head.height) ? mesh.head.height : 0
     };
 }
 function portraitScale(base, target, useHead) {
@@ -442,14 +527,13 @@ function portraitScale(base, target, useHead) {
 
 function transformLayers(targetLayers, baseLayer) {
     var len = targetLayers.length,
-        tmp = [baseLayer.id],
         slice = 1 / (targetLayers.length);
-    lr.selectNoLayers();
+    operationStage='Align layers';
+    app.changeProgressText(operationStage);
     for (var i = 0; i < len; i++) {
         var text = "Align layer: " + lr.getProperty("name", targetLayers[i].id);
         if (app.doProgressTask(slice, "workChunk(text, targetLayers, baseLayer, i)") === false) throwCancelled();
     }
-    if (tmp.length) doc.selectLayers(tmp)
     function normalizeAngle(angle) {
         while (angle > 180) angle -= 360;
         while (angle < -180) angle += 360;
@@ -457,7 +541,8 @@ function transformLayers(targetLayers, baseLayer) {
     }
     function workChunk(text, targetLayers, baseLayer, i) {
         if (targetLayers[i] instanceof Object && targetLayers[i].measurement && targetLayers[i].measurement.middle) {
-            tmp.push(targetLayers[i].id)
+            operationStage='Align layer ID '+targetLayers[i].id;
+            app.changeProgressText(text);
             doc.selectLayers([targetLayers[i].id])
             app.updateProgress(i + 1, len)
             if (!cfg.pose) {
@@ -483,29 +568,23 @@ function transformLayers(targetLayers, baseLayer) {
         $.sleep(0);
     }
 }
-function debug(mesh) {
-    for (a in mesh) {
-        doc.addCounter(mesh[a][0], mesh[a][1])
-    }
-}
-function AM(target, order) {
+function AM(target) {
     var s2t = stringIDToTypeID,
         t2s = typeIDToStringID,
         AR = ActionReference,
         AD = ActionDescriptor;
     target = target ? s2t(target) : null;
-    this.getProperty = function (property, id, idxMode, descMode) {
+    this.getProperty = function (property, id) {
         property = s2t(property);
         (r = new AR).putProperty(s2t('property'), property);
-        id != undefined ? (idxMode ? r.putIndex(target, id) : r.putIdentifier(target, id)) :
-            r.putEnumerated(target, s2t('ordinal'), order ? s2t(order) : s2t('targetEnum'));
-        try { return descMode ? executeActionGet(r) : getDescValue(executeActionGet(r), property) } catch (e) { return false };
+        id != undefined ? r.putIdentifier(target, id) :
+            r.putEnumerated(target, s2t('ordinal'), s2t('targetEnum'));
+        try { return getDescValue(executeActionGet(r), property) } catch (e) { return false };
     }
-    this.hasProperty = function (property, id, idxMode) {
+    this.hasProperty = function (property) {
         property = s2t(property);
         (r = new AR).putProperty(s2t('property'), property);
-        id ? (idxMode ? r.putIndex(target, id) : r.putIdentifier(target, id))
-            : r.putEnumerated(target, s2t('ordinal'), s2t('targetEnum'));
+        r.putEnumerated(target, s2t('ordinal'), s2t('targetEnum'));
         try { return executeActionGet(r).hasKey(property) } catch (e) { return false }
     }
     this.descToObject = function (d) {
@@ -516,73 +595,95 @@ function AM(target, order) {
         }
         return o
     }
+    this.resizePreview = function (scale) {
+        var d=new AD, r=new AR, offset=new AD;
+        r.putEnumerated(s2t('layer'),s2t('ordinal'),s2t('targetEnum'));
+        d.putReference(s2t('null'),r);
+        d.putEnumerated(s2t('freeTransformCenterState'),s2t('quadCenterState'),s2t('QCSAverage'));
+        offset.putUnitDouble(s2t('horizontal'),s2t('pixelsUnit'),0);
+        offset.putUnitDouble(s2t('vertical'),s2t('pixelsUnit'),0);
+        d.putObject(s2t('offset'),s2t('offset'),offset);
+        d.putUnitDouble(s2t('width'),s2t('percentUnit'),scale*100);
+        d.putUnitDouble(s2t('height'),s2t('percentUnit'),scale*100);
+        d.putEnumerated(s2t('interfaceIconFrameDimmed'),s2t('interpolationType'),s2t('nearestNeighbor'));
+        executeAction(s2t('transform'),d,DialogModes.NO);
+    };
+    this.exportSmartObject = function (file) {
+        var d=new AD, previousDialogs=app.displayDialogs;
+        d.putPath(s2t('null'),file);
+        try {
+            app.displayDialogs=DialogModes.NO;
+            executeAction(s2t('placedLayerExportContents'),d,DialogModes.NO);
+        } finally {
+            app.displayDialogs=previousDialogs;
+        }
+    };
+    this.editSmartObject = function () {
+        executeAction(s2t('placedLayerEditContents'), undefined, DialogModes.NO);
+    };
+    this.prepareJPEG = function () {
+        // Convert only the opened disposable preview; source pixels are restored.
+        var mode=this.getProperty('mode'), value=typeof mode=='string'?mode:(mode && mode.value);
+        if(value!='RGBColor' && value!='RGBColorMode') {
+            var descriptor=new AD;
+            descriptor.putClass(s2t('to'),s2t('RGBColorMode'));
+            executeAction(s2t('convertMode'),descriptor,DialogModes.NO);
+        }
+        if(this.getProperty('depth')!=8) {
+            var descriptor=new AD;
+            descriptor.putInteger(s2t('depth'),8);
+            descriptor.putBoolean(s2t('merge'),false);
+            executeAction(s2t('convertMode'),descriptor,DialogModes.NO);
+        }
+    };
+    this.saveACopy = function (file) {
+        var options=new AD, descriptor=new AD;
+        options.putInteger(s2t('extendedQuality'),6);
+        options.putEnumerated(s2t('matteColor'),s2t('matteColor'),s2t('none'));
+        descriptor.putObject(s2t('as'),s2t('JPEG'),options);
+        descriptor.putPath(s2t('in'),file);
+        descriptor.putBoolean(s2t('copy'),true);
+        executeAction(s2t('save'),descriptor,DialogModes.NO);
+    };
     this.convertToSmartObject = function () {
         executeAction(s2t('newPlacedLayer'), undefined, DialogModes.NO)
     }
-    this.editSmartObject = function () {
-        executeAction(s2t('placedLayerEditContents'), undefined, DialogModes.NO)
-    }
-    this.saveACopy = function (pth) {
-        (d1 = new AD).putInteger(s2t('extendedQuality'), 6);
-        d1.putEnumerated(s2t('matteColor'), s2t('matteColor'), s2t('none'));
-        (d = new AD).putObject(s2t('as'), s2t('JPEG'), d1);
-        d.putPath(s2t('in'), pth);
-        d.putBoolean(s2t('copy'), true);
-        executeAction(s2t('save'), d, DialogModes.NO);
-    }
+
+
     this.selectLayers = function (ids) {
-        var r = new AR;
-        for (var a in ids) r.putIdentifier(s2t("layer"), ids[a]);
-        (d = new AD).putReference(s2t("target"), r)
-        d.putBoolean(s2t("makeVisible"), true)
-        executeAction(s2t("select"), d, DialogModes.NO)
-    }
-    this.selectNoLayers = function () {
-        (r = new AR).putEnumerated(s2t("layer"), s2t('ordinal'), s2t('targetEnum'));
-        (d = new AD).putReference(s2t('target'), r);
-        executeAction(s2t('selectNoLayers'), d, DialogModes.NO);
-    }
-    this.flatten = function () {
-        executeAction(s2t('flattenImage'), undefined, DialogModes.NO);
-    }
-    this.addCounter = function (x, y) {
-        (d = new AD).putDouble(s2t("x"), x);
-        d.putDouble(s2t("y"), y);
-        executeAction(s2t("countAdd"), d, DialogModes.NO);
-    }
-    this.convertToRGB = function () {
-        (d = new AD).putClass(s2t('to'), s2t('RGBColorMode'))
-        executeAction(s2t('convertMode'), d, DialogModes.NO);
-    }
+        // One layer per ActionReference: additional IDs use addToSelection.
+        // Never build a nested reference chain from several sibling layers.
+        var seen={}, index=0;
+        for(var i=0;i<ids.length;i++) {
+            var id=ids[i];
+            if(typeof id!='number' || !isFinite(id) || id<=0 || Math.floor(id)!=id)
+                throw new Error('Invalid layer ID at '+operationStage+': '+id);
+            if(seen[id]) continue;
+            seen[id]=true;
+            var reference=new AR, descriptor=new AD;
+            reference.putIdentifier(s2t('layer'),id);
+            descriptor.putReference(s2t('null'),reference);
+            if(index>0) descriptor.putEnumerated(s2t('selectionModifier'),
+                s2t('selectionModifierType'),s2t('addToSelection'));
+            descriptor.putBoolean(s2t('makeVisible'),true);
+            try {
+                executeAction(s2t('select'),descriptor,DialogModes.NO);
+            } catch(e) {
+                if(e.number==8007) throw e;
+                throw new Error('Select layer ID '+id+' at '+operationStage+': '+e.message);
+            }
+            index++;
+        }
+    };
     this.close = function (save) {
         save = save != true ? s2t("no") : s2t("yes");
         (d = new AD).putEnumerated(s2t("saving"), s2t("yesNo"), save);
         executeAction(s2t("close"), d, DialogModes.NO);
     }
-    this.makeSelection = function (bounds, addTo) {
-        (r = new AR).putProperty(s2t('channel'), s2t('selection'));
-        (d = new AD).putReference(s2t('null'), r);
-        (d1 = new AD).putUnitDouble(s2t('top'), s2t('pixelsUnit'), bounds.top);
-        d1.putUnitDouble(s2t('left'), s2t('pixelsUnit'), bounds.left);
-        d1.putUnitDouble(s2t('bottom'), s2t('pixelsUnit'), bounds.bottom);
-        d1.putUnitDouble(s2t('right'), s2t('pixelsUnit'), bounds.right);
-        d.putObject(s2t('to'), s2t('rectangle'), d1);
-        executeAction(s2t(addTo ? 'addTo' : 'set'), d, DialogModes.NO);
-    }
-    this.selectPreviousHistoryState = function () {
-        (r = new AR).putEnumerated(s2t("historyState"), s2t("ordinal"), s2t("previous"));
-        (d = new AD).putReference(s2t("null"), r);
-        executeAction(s2t("select"), d, DialogModes.NO);
-    }
-    this.setScale = function (width) {
-        (d = new AD).putUnitDouble(s2t("width"), s2t("percentUnit"), width * 100);
-        d.putBoolean(s2t("scaleStyles"), true);
-        d.putBoolean(s2t("constrainProportions"), true);
-        d.putEnumerated(s2t("interpolation"), s2t("interpolationType"), s2t("nearestNeighbor"));
-        executeAction(s2t("imageSize"), d, DialogModes.NO);
-    }
+
+
+
     this.transform = function (scale, cX, cY, angle, dialogMode) {
-        dialogMode == DialogModes.ALL ? DialogModes.ALL : DialogModes.NO;
         (r = new AR).putEnumerated(s2t('layer'), s2t('ordinal'), s2t('targetEnum'));
         (d = new AD).putReference(s2t('null'), r);
         d.putEnumerated(s2t('freeTransformCenterState'), s2t('quadCenterState'), s2t('QCSIndependent'));
@@ -608,28 +709,6 @@ function AM(target, order) {
         (r = new AR).putEnumerated(s2t('layer'), s2t('ordinal'), s2t('targetEnum'));
         (d = new AD).putReference(s2t('target'), r);
         executeAction(s2t('rasterizeLayer'), d, DialogModes.NO);
-    }
-    this.getSelectionMode = function () {
-        (r = new AR).putProperty(s2t('property'), p = s2t('imageProcessingPrefs'));
-        r.putEnumerated(s2t('application'), s2t('ordinal'), s2t('targetEnum'));
-        return t2s(executeActionGet(r).getObjectValue(p).getEnumerationValue(s2t('imageProcessingSelectSubjectPrefs')));
-    }
-    this.setSelectionMode = function (state) {
-        (r = new AR).putProperty(s2t("property"), s2t("imageProcessingPrefs"));
-        r.putEnumerated(s2t("application"), s2t("ordinal"), s2t("targetEnum"));
-        (d = new AD).putReference(s2t("null"), r);
-        (d1 = new AD).putEnumerated(s2t("imageProcessingSelectSubjectPrefs"), s2t("imageProcessingSelectSubjectPrefs"), s2t(state));
-        d.putObject(s2t("to"), s2t("imageProcessingPrefs"), d1);
-        executeAction(s2t("set"), d, DialogModes.NO);
-    }
-    this.selectSubject = function (sampleAllLayers) {
-        sampleAllLayers = sampleAllLayers == undefined ? false : true;
-        (d = new AD).putBoolean(s2t('sampleAllLayers'), sampleAllLayers);
-        executeAction(s2t('autoCutout'), d, DialogModes.NO);
-    }
-    this.crop = function (deletePixels) {
-        (d = new AD).putBoolean(s2t('delete'), deletePixels);
-        executeAction(s2t('crop'), d, DialogModes.NO);
     }
     this.setLayerOpacity = function (opacity) {
         (r = new AR).putEnumerated(s2t("layer"), s2t("ordinal"), s2t("targetEnum"));
@@ -658,7 +737,7 @@ function AM(target, order) {
 }
 function faceApi(apiHost, portSend, portListen, apiFile) {
     var sequence=0, session=(new Date()).getTime()+'-'+Math.floor(Math.random()*1000000),
-        serverID='face-alignment/0.143';
+        serverID='face-alignment/0.157';
     function runtimeFiles() {
         var local=$.getenv('LOCALAPPDATA');
         if(!local) throw new Error('LOCALAPPDATA is unavailable.');
@@ -679,10 +758,10 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
         if(!installer.exists) installer=new File(folder.parent.fsName+'/install_runtime.bat');
         if(!installer.exists) throw new Error('Run install_runtime.bat from the Face alignment package first.');
         if(!installer.execute()) throw new Error('Cannot start install_runtime.bat. Run it manually.');
-        var w=new Window('palette','Face alignment — установка Python'),
-            label=w.add('statictext',undefined,'Завершите установку в открывшемся окне.'),
-            cancel=w.add('button',undefined,'Закрыть ожидание'), stopped=false,
+        var w=new Window('palette','Face alignment — установка Python'), cancel, stopped=false,
             start=(new Date()).getTime();
+        w.add('statictext',undefined,'Завершите установку в открывшемся окне.');
+        cancel=w.add('button',undefined,'Закрыть ожидание');
         cancel.onClick=function(){stopped=true;};
         w.onClose=function(){stopped=true;}; w.show();
         try {
@@ -717,18 +796,17 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     };
     function findPythonModule(name) {
         var folder=new File($.fileName).parent;
-        var paths=[folder.fsName+'/lib/'+name+'.pyw',folder.fsName+'/'+name+'.pyw'];
-        for(var i=0;i<paths.length;i++) {var f=new File(paths[i]);if(f.exists)return f;}
-        return null;
+        var file=new File(folder.fsName+'/lib/'+name+'.pyw');
+        return file.exists?file:null;
     }
     this.cleanup=function(path) {
         return sendMessage({type:'cleanup',message:path},1500);
     };
     this.sendPayload=function(type,payload) {
-        var result=sendMessage({type:type,message:payload,head_support:!!(cfg.headSupport && cfg.resize)},DETECTION_DELAY);
+        var result=sendMessage({type:type,message:payload},type=='batch_finish'?15*60*1000:DETECTION_DELAY);
         if(!result) throw new Error(str.errDetectionTimeout);
         if(result.server_id!=serverID) throw new Error('Unexpected detection server.');
-        if(result.type=='cancelled') throw new Error(result.message);
+        if(result.type=='cancelled') throwCancelled();
         if(result.type=='error') throw new Error(result.message);
         return result.type=='answer'?result.message:null;
     };
@@ -747,7 +825,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
     function sendMessage(o,delay) {
         o.request_id=session+'-'+(++sequence);
         var listener=new Socket(),sender=new Socket(),
-            detection=o.type=='face' || o.type=='pose', sent=false, received=false;
+            detection=o.type=='batch_finish', sent=false, received=false;
         if(!listener.listen(portListen,'UTF-8')) throw new Error('Response port '+portListen+' is busy.');
         try {
             sender.timeout=1;
@@ -769,7 +847,7 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
                 var answer=listener.poll();
                 if(answer) {
                     var parsed=null;
-                    try {answer.timeout=5; parsed=eval('('+answer.readln()+')');} catch(e) {} finally {answer.close();}
+                    try {answer.timeout=5; var body='', part; while(!answer.eof) {part=answer.read(65536); if(!part) break; body+=part; if(body.indexOf('\n')>=0) break;} parsed=eval('('+body+')');} catch(e) {} finally {answer.close();}
                     if(parsed && parsed.request_id==o.request_id) { received=true;return parsed; }
                 }
                 $.sleep(5);
@@ -801,11 +879,13 @@ function faceApi(apiHost, portSend, portListen, apiFile) {
 function Locale() {
     this.err = { ru: 'Скрипт остановлен', en: 'Script stopped' }
     this.errDoc = { ru: 'Нет активного документа!', en: 'No active document!' }
+    this.errRGB = { ru: 'Для анализа нужен документ в режиме RGB. Выберите Изображение → Режим → RGB и повторите запуск. Скрипт не изменял документ.', en: 'Analysis requires an RGB document. Choose Image > Mode > RGB Color and run again. The document has not been changed.' }
+    this.errDepth = { ru: 'Поддерживается RGB с глубиной 8, 16 или 32 бита на канал. Проверьте Изображение → Режим. Скрипт не изменял документ.', en: 'RGB with 8, 16 or 32 bits per channel is required. Check Image > Mode. The document has not been changed.' }
     this.errLr = { ru: '2 и более слоя должны быть выбраны: нижний слой является образцом размера лица. Слои должны быть незаблокированными!', en: 'Two or more layers must be selected: the bottom layer is the face size sample. The layers must be unlocked!' }
-    this.errModule = { ru: 'Модуль ' + API_FILE + ' не найден! Убедитесь, что он находится в той же папке что и скрипт!', en: 'Module ' + API_FILE + ' not found! Make sure it in the same folder as the script!' }
-    this.errConnection = { ru: 'Невозможно установить соединение c ' + API_FILE, en: 'Impossible to establish a connection with ' + API_FILE }
+    this.errModule = { ru: 'Модуль ' + API_FILE + '.pyw не найден в папке lib!', en: 'Module ' + API_FILE + '.pyw not found in the lib folder!' }
     this.errDetectionTimeout = { ru: 'Превышено время ожидания ответа детектора', en: 'Detector response timeout' }
     this.errBaseLayer = { ru: 'Ключевые точки не найдены на нижнем слое!', en: 'Key points not found on bottom layer!' }
+    this.preparingLayer = { ru: 'Подготовка слоя', en: 'Preparing layer' }
     this.starting = { ru: 'Запуск модуля python...', en: 'Starting python module...' }
     this.modePanel = { ru: 'Тип выравнивания', en: 'Alignment mode' }
     this.optionsPanel = { ru: 'Параметры выравнивания слоёв:', en: 'Layer alignment options:' }
@@ -840,7 +920,7 @@ function Locale() {
     this.silentMode = { ru: 'тихий режим (без сообщений об ошибках)', en: 'Silent mode (no error alerts)' }
 }
 function Config() {
-    settingsObj = this
+    var settingsObj = this
     this.auto = false
     this.move = true
     this.resize = true
@@ -872,7 +952,7 @@ function Config() {
         }
     }
     this.putScriptSettings = function (toAction) {
-        var d = objectToDescriptor(settingsObj, UUID)
+        var d = objectToDescriptor(settingsObj)
         if (toAction) playbackParameters = d; else putCustomOptions(UUID, d, true);
         function objectToDescriptor(o) {
             var d = new ActionDescriptor;
